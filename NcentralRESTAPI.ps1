@@ -1,9 +1,44 @@
-﻿### NcentralToken class
-### Properties:
-### type: The type of the token (at the moment only 'Bearer' is used)
-### expirySeconds: The number of seconds the token is valid
-### validTo: Calculated from the current time at creation and expirySeconds
-### token: A hidden property with the actual token, in unencrypted format
+### Helper classes
+class NcentralScheduledTaskCredential {
+    [string]$type
+    [string]$username
+    hidden [string]$password
+
+    ### Constructor
+    NcentralScheduledTaskCredential([string]$type, [string]$username, [securestring]$password) {
+        $decryptedpwd = ([Net.NetworkCredential]::New('', $password)).password
+        if ($type -notin @('LocalSystem','CustomCredentials', 'DeviceCredentials')) {
+            throw ("Invalid type {0}" -f $type)
+        }
+        if (($type -eq 'LocalSystem' -or $type -eq 'DeviceCredentials') -and ($username.length -ne 0 -or $decryptedpwd.length -ne 0)) {
+            throw ("Type is {0}, but username and/or password also given" -f $type)
+        }
+        if ($type -eq 'CustomCredentials' -and $username.length -eq 0 -and $decryptedpwd.length -eq 0) {
+            throw ("Type is {0}, but username and/or password are not given" -f $type)
+        }
+        $this.type = $type
+        if ($type -eq 'CustomCredentials') {
+            $this.username = $username
+            $this.password = $decryptedpwd
+        } else {
+            $this.username = $null
+            $this.password = $null
+        }
+    }
+}
+
+class NcentralScheduledTaskParameter {
+    [string]$name
+    [string]$value
+
+    NcentralScheduledTaskParameter([string]$name,[string]$value) {
+        if ($null -eq $name) {
+            throw ("name should not be null")
+        }
+        $this.name = $name
+        $this.value = $value
+    }
+}
 
 class NcentralToken {
     [string]$type
@@ -19,14 +54,7 @@ class NcentralToken {
     }
 }
 
-### The class that holds the N-central connection
-### Properties:
-### APIHost: The DNS name (FQDN) of the API host.
-### isConnected: Whether the last connection attempt was successful or not
-### ErrorText: Information on the connection error if isConnected is false
-### accesstoken: A hidden property with the access token. Uses the NcentralToken class
-### refreshtoken: A hidden property with the refresh token. Uses the NcentralToken class
-
+### Main class
 class NcentralClass {
     [string]$APIHost = $null
     [bool]$IsConnected = $false
@@ -52,10 +80,10 @@ class NcentralClass {
             Write-Verbose "Token is still valid, not refreshing"
             return
         } catch {
+            Write-Verbose "Token is no longer valid. Trying to refresh"
         }
 
         ### Try to refresh
-        Write-Verbose "Refreshing tokens"
         [System.Collections.HashTable]$header = @{}
         $header.Add('X-ACCESS-EXPIRY-OVERRIDE',('{0}s' -f $this.accesstoken.expirySeconds)) | Out-Null
         $header.Add('X-REFRESH-EXPIRY-OVERRIDE',('{0}s' -f $this.refreshtoken.expirySeconds)) | Out-Null
@@ -103,6 +131,48 @@ class NcentralClass {
                 $continue = $false
             }
         } until ($false -eq $continue)
+        return $result
+    }
+
+    ###
+    [pscustomobject]GetRaw([string]$Api) {
+        $this.RefreshTokens()
+
+        $header = @{
+            Authorization = ("{0} {1}" -f $this.accesstoken.type, $this.accesstoken.token)
+            'Content-Type' = "application/json"
+        }
+        $URI = "https://{0}/api/{1}" -f $this.APIHost, $Api
+        try {
+            $result = Invoke-Restmethod -Uri $URI -Headers $header
+            return $result
+        }
+        catch {
+            throw ("Error invoking GET to URL $URI")
+        }
+    }
+
+    ### Used for POST requests
+    ### The access token is refreshed if necessary
+    ### Returns an array of objects
+    [System.Collections.ArrayList]Post([string]$API, [System.Collections.HashTable]$Params) {
+        $this.RefreshTokens()
+        
+        $result = [System.Collections.ArrayList]@()
+        $header = @{
+            Authorization = ("{0} {1}" -f $this.accesstoken.type, $this.accesstoken.token)
+            'Content-Type' = "application/json"
+        }
+        $body = ConvertTo-Json -InputObject $Params -Depth 99 -Compress
+        $URI = ("https://{0}/api/{1}" -f $this.APIHost, $Api)
+        Write-Verbose ("Calling URL {0} with body {1}" -f $URI, $body)
+        try {
+            $tmp = Invoke-RestMethod -URI $URI -Method Post -Headers $header -Body $body -ContentType "application/json"
+            $result.add($tmp)
+        }
+        catch {
+            throw("POST to URL {0} resulted in error {1}" -f $URI, $Error[0].Exception.Message)
+        } 
         return $result
     }
 
@@ -202,7 +272,7 @@ class NcentralClass {
 function Connect-Ncentral {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true)][securestring]$Key,
+        [parameter(Mandatory=$true)][Alias('Token')][securestring]$Key,
         [parameter(Mandatory=$true)][string]$ApiHost,
         [parameter(Mandatory=$false)][int]$accessexpiry = $null,
         [parameter(Mandatory=$false)][int]$refreshexpiry = $null
@@ -224,7 +294,7 @@ function Connect-Ncentral {
     Test if there is a connected N-central object. Note that this does not check the validity of the access token and/or refresh token.
 
     .INPUTS
-    Nothing. You need to pass the parameters in the invocation.
+    Nothing.
 
     .OUTPUTS
     An error when no valid N-central connection is found.
@@ -288,6 +358,43 @@ function Disconnect-Ncentral {
     Param()
 
     Remove-Variable -Scope global -Name _NcentralSession -Force -ErrorAction SilentlyContinue
+}
+
+<#
+    .SYNOPSIS
+    Get N-central server information
+
+    .DESCRIPTION
+    Get N-central server information.
+
+    .EXAMPLE
+    Get-NcentralServerInfo
+#>
+function Get-NcentralServerInfo {
+    Param()
+
+    Test-NcentralConnection
+    $Global:_NcentralSession.GetRaw("server-info")
+}
+
+<#
+    .SYNOPSIS
+    Get N-central server health
+
+    .DESCRIPTION
+    Get information about the server health of N-central
+
+    .OUTPUTS
+    Information about the server health
+
+    .EXAMPLE
+    Get-NcentralServerHealth
+#>
+function Get-NcentralServerHealth {
+    Param()
+
+    Test-NcentralConnection
+    $Global:_NcentralSession.GetRaw("health")
 }
 
 <#
@@ -356,6 +463,9 @@ function Get-NcentralCustomer {
     .PARAMETER DeviceId
     A device ID (or a list of device IDs, possibly from objects from the pipeline).
 
+    .PARAMETER DeviceName
+    Only devices matching the regular expression DeviceName are returned.
+
     .PARAMETER scheduledTasks
     If this switch is given, instead of devices the list of scheduled tasks from the input devices are returned
 
@@ -371,30 +481,42 @@ function Get-NcentralCustomer {
     Get-NcentralCustomer -CustomerName "ORGANISATION" | Get-NcentralDevice | Get-NcentralDevice -scheduledTasks
 
     Get the customer 'ORGANISATION', get the devices associated with this customer, and then get the scheduled tasks for these devices
+
+    .EXAMPLE
+    Get-NcentralDevice -DeviceName SQL
+
+    Gets all devices with 'SQL' in the name
+
+    .EXAMPLE
+    Get-NcentralDevice -DeviceName '^SQL'
+
+    Gets all devices where the name starts with SQL
 #>
 function Get-NcentralDevice {
     [CmdletBinding(DefaultParametersetName='All')]
     Param(
         [parameter(Mandatory=$false, ParameterSetName='All')][switch]$All = $true,
+        [parameter(Mandatory=$false, ParameterSetName='DeviceName', ValueFromPipeLine=$true)][string[]]$DeviceName,
         [parameter(Mandatory=$true, ParameterSetName='Device', ValueFromPipelineByPropertyName=$true)][int[]]$DeviceId,
         [parameter(Mandatory=$false, ParameterSetName='Device')][switch]$scheduledTasks,
         [parameter(Mandatory=$true, ParameterSetName='Customer', ValueFromPipelineByPropertyName=$true)][string]$CustomerId
     )
 
-    begin{
+    begin{     
         Test-NcentralConnection
         $alldevices = [System.Collections.ArrayList]@()
     }
+
     process {
         switch ($PSCmdlet.ParameterSetName) {
             'All' {
                 $API = "devices"
-                $devices = $Global:_NcentralSession.get($API)
+                $devices = $Global:_NcentralSession.Get($API)
                 $allDevices.AddRange($devices)
             }
             'Customer' {
                 $API = "devices"
-                $devices = $Global:_NcentralSession.get($API)
+                $devices = $Global:_NcentralSession.Get($API)
                 $alldevices.AddRange($devices)
             }
             'Device' {
@@ -403,10 +525,21 @@ function Get-NcentralDevice {
                     if ($scheduledTasks) {
                        $API = ("{0}/scheduled-tasks" -f $API)
                     }
-                    $devices = $Global:_NcentralSession.get($API)
+                    $devices = $Global:_NcentralSession.Get($API)
                     $alldevices.AddRange($devices)
                 }
-            }      
+            }
+            'DeviceName' {
+                $API = "devices"
+                $devices = $Global:_NcentralSession.Get($API)
+                $filter = $DeviceName -join '|'
+                Write-Verbose ("Filtering using filter {0}" -f $filter)
+                foreach ($d in $devices) {
+                    if ($d.longname -match $filter) {
+                        $alldevices.Add($d) | Out-Null
+                    }
+                }
+            }
         }
     }
 
@@ -438,14 +571,15 @@ function Get-NcentralDevice {
     If the status is requested, whether to return basic information or detailed information
 
     .EXAMPLE
-    Get-NcentralCustomer -CustomerName "ORGANISATION" | get-ncentraldevice | get-ncentraldevice -scheduledtasks | Get-NcentralScheduledTaskStatus
+    Get-NcentralCustomer -CustomerName "ORGANISATION" | get-ncentraldevice | get-ncentraldevice -scheduledtasks | Get-NcentralScheduledTask
 
     Get the 'ORGANISATION' customer, get all devices in this organisation, get all scheduled tasks for this organisation, and return basic information on these scheduled tasks
 
     .EXAMPLE
-    Get-NcentralCustomer -CustomerName "ORGANISATION" | get-ncentraldevice | get-ncentraldevice -scheduledtasks | Get-NcentralScheduledTaskStatus -
+    Get-NcentralCustomer -CustomerName "ORGANISATION" | get-ncentraldevice | get-ncentraldevice -scheduledtasks | Get-NcentralScheduledTask -Status -Details
+    Get the 'ORGANISATION' customer, get all devices in this organisation, get all scheduled tasks for these devices, and return detailed status information on these scheduled tasks
 #>
-function Get-NcentralScheduledTaskStatus {
+function Get-NcentralScheduledTask {
     [CmdletBinding()]
     Param(
         [parameter(Mandatory=$true, ValueFromPipelineByPropertyName=$true)][int[]]$TaskId,
@@ -474,5 +608,180 @@ function Get-NcentralScheduledTaskStatus {
     
     end {
         return $alltasks
+    }
+}
+
+<#
+    .SYNOPSIS
+    Create a N-central scheduled task credential object
+
+    .DESCRIPTION
+    When creating a new scheduled task via New-NcentralScheduledTask, a credential object is needed. This function creates this object.
+
+    .PARAMETER LocalSystem
+    Create a LocalSystem credential object
+
+    .PARAMETER DeviceCredentials
+    Create a DeviceCredentials credential object
+
+    .PARAMETER CustomCredentials
+    Create a custom credentials object. A username and password are also needed when creating this type of credential
+    
+    .PARAMETER Username
+    The username for a custom credentials object.
+
+    .PARAMETER Password
+    The password for a custom credentials object.
+
+    .EXAMPLE
+    $cred = New-NcentralScheduledTaskCredential -LocalSystem
+
+    .EXAMPLE
+    $cred = New-NcentralScheduledTaskCredential -CustomCredentials -Username MyUser -Password (Read-Host -AsSecureString)
+#>
+function New-NcentralScheduledTaskCredential {
+    [CmdletBinding()]
+    Param(
+        [parameter(Mandatory=$true, ParameterSetName="LocalSystem")][switch]$LocalSystem,
+        [parameter(Mandatory=$true, ParameterSetName="DeviceCredentials")][switch]$DeviceCredentials,
+        [parameter(Mandatory=$true, ParameterSetName="CustomCredentials")][switch]$CustomCredentials,
+        [parameter(Mandatory=$true, ParameterSetName="CustomCredentials")][string]$Username,
+        [parameter(Mandatory=$true, ParameterSetName="CustomCredentials")][securestring]$Password
+    )
+
+    Test-NcentralConnection
+    Write-Verbose "type = $($PSCmdlet.ParameterSetName)"
+    Write-Verbose "Username = $Username"
+    Write-Verbose "Password = $Password"
+    return [NcentralScheduledTaskCredential]::New($PSCmdlet.ParameterSetName, $Username, $Password)
+}
+
+<#
+    .SYNOPSIS
+    Create a N-central scheduled task parameters object
+
+    .DESCRIPTION
+    When creating a new N-central scheduled task, some tasks require extra parameters. With this function, you can create those parameters
+
+    .PARAMETER Name
+    One or more parameter names. The number of names should match the number of values.
+
+    .PARAMETER Value
+    One or more parameter values. The number of values should match the number of values.
+
+    .EXAMPLE
+    $params = New-NcentralScheduledTaskParameter -Name 'CountFile', 'Folder' -Value '*','C:\Temp'
+#>
+function New-NcentralScheduledTaskParameter {
+    [CmdletBinding()]
+    Param(
+        [parameter(Mandatory=$true)][string[]]$Name,
+        [parameter(Mandatory=$true)][string[]]$Value
+    )
+
+    $Count = ($Name | Measure-Object).count
+    if (($Value | Measure-Object).count -ne $Count) {
+        throw ("The Name and Value arrays should have the same number of elements")
+    }
+    return 0..($Count-1) | ForEach-Object { [NcentralScheduledTaskParameter]::New($Name[$_], $Value[$_]) }
+}
+
+<#
+    .SYNOPSIS
+    Create a direct support task on one or more devices
+
+    .DESCRIPTION
+    Create a direct support task on one or more devices.
+    If you use the pipeline to create multiple support tasks, the device ID is added to the task name in order to create unique names.
+
+    .INPUTS
+    A devicelist generated with Get-NcentralDevice
+
+    .OUTPUTS
+    An array of task details
+
+    .NOTES
+    If you get a 403 error code, check if the script repository with ID itemId is enabled for API access
+    If you get a 500 error code, check if the name you are using is unique
+    
+    .PARAMETER TaskName
+    The name of the support task. If you use the pipeline to create tasks for multiple devices, the device ID is added to the task name to create unique names.
+
+    .PARAMETER DeviceId
+    The ID of the device to create the task on. Don't use this parameter if you use the pipeline to define the devices on which the task should be created.
+
+    .PARAMETER CustomerId
+    The ID of the customer for the device. Don't use this parameter if you use the pipeline to define the devices on which the task should be created.
+
+    .PARAMETER DeviceList
+    An array of device objects. Don't use this parameter if you use the pipeline to define the devices on which the task should be created.
+
+    .PARAMETER TaskType
+    The type of the task.
+
+    .PARAMETER ItemId
+    The ID of the repository item. The item should be enabled for API access
+
+    .PARAMETER Credential
+    The credential used. If no credential is given, LocalSystem is used as credential
+
+    .PARAMETER Parameters
+    The parameters to be used, if needed.
+
+    .LINK
+    New-NcentralScheduledTaskCredential
+
+    .LINK
+    New-NcentralScheduledTaskParameter
+    
+    .EXAMPLE
+    $name = "Randomtest--$(get-random -Minimum 10000000 -Maximum 99999999)"
+    $cred = New-NcentralScheduledTaskCredential -DeviceCredentials
+    $params = New-NcentralScheduledTaskParameter -Name "CountFile", "Folder" -Value "*", "C:\Windows"
+    Get-NcentralDevice | New-NcentralScheduledTask -TaskName $name -TaskType AutomationPolicy -RepositoryId 1530938361 -Parameters $params -credential $cred
+
+    Get all devices that the API account has access to, and create a support task on all of them. Because the devicelist is added through the pipeline, the device ID is added to the name.
+#>
+function New-NcentralScheduledTask {
+    [CmdletBinding()]
+    Param(
+        [parameter(Mandatory=$true)][string]$TaskName,
+        [parameter(Mandatory=$true, ParameterSetName="DeviceId")][int]$DeviceId,
+        [parameter(Mandatory=$true, ParameterSetName="DeviceId")][int]$CustomerId,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true, ParameterSetName="DeviceList")]$DeviceList,
+        [parameter(Mandatory=$true)][ValidateSet('AutomationPolicy','AVDefenderFullScan','AVDefenderQuickScan','FileTransfer', 'Script', 'SoftwareDistribution')][string]$TaskType,
+        [parameter(Mandatory=$true)][Alias("RepositoryId")][int]$ItemId,
+        [parameter(Mandatory=$false)][NcentralScheduledTaskCredential]$credential = [NcentralScheduledTaskCredential]::New('LocalSystem',$null,$null),
+        [parameter(Mandatory=$false)][NcentralScheduledTaskParameter[]]$Parameters = @()
+    )
+
+    begin {
+        Test-NcentralConnection
+        $allresult = [System.Collections.ArrayList]@()
+    }
+
+    process {
+        $body = [System.Collections.Hashtable]@{}
+        $body.Add("itemId",$ItemId) | Out-Null
+        $body.Add("taskType", $TaskType) | Out-Null
+        $body.add("credential",$Credential) | Out-Null
+        $body.Add("parameters",$Parameters) | Out-Null
+        if ($PSCmdlet.ParameterSetName -eq 'DeviceId') {
+            $body.add("name", $TaskName) | Out-Null
+            $body.add("deviceId", $DeviceId) | Out-Null
+            $body.add("customerId", $CustomerId) | Out-Null
+            $result = $global:_NcentralSession.Post("scheduled-tasks/direct", $body)
+            $allresult.add($result) | Out-Null
+        } else {
+            $body.add("name", ("{0} - {1}" -f $TaskName, $DeviceList.deviceId)) | out-Null
+            $body.add("deviceId", $DeviceList.deviceId) | Out-Null
+            $body.add("customerId", $DeviceList.CustomerId) | Out-Null
+            $result = $global:_NcentralSession.Post("scheduled-tasks/direct", $body)
+            $allresult.add($result) | Out-Null
+        }
+    }
+
+    end {
+        return $allresult
     }
 }
