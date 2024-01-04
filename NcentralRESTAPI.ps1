@@ -237,7 +237,7 @@ class NcentralClass {
             $this.refreshtoken = [NCentralToken]::New($tokens.tokens.refresh.token, $tokens.tokens.refresh.type, $tokens.tokens.refresh.expirySeconds)
             $this.IsConnected = $true
             ### Add the available endpoints to the connection object
-            $apiinfo = Invoke-RestMethod -Uri "https://nfr.n-able.com/api"
+            $apiinfo = Invoke-RestMethod -Uri ("https://{0}/api" -f $this.ApiHost)
             $properties = ($apiinfo._links | get-member | Where-Object { $_.memberType -eq 'NoteProperty' }).name | Where-Object { $_ -ne 'root' }
             $root = $apiinfo._links.root
             $this.ApiEndpoints = $properties | ForEach-Object { $apiinfo._links.$_ -replace "^$root/",""  }
