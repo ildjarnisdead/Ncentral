@@ -61,8 +61,19 @@ class NcentralClass {
     [string]$ErrorText = $null
     hidden [NcentralToken]$accesstoken = $null
     hidden [NcentralToken]$refreshtoken = $null
+    [string[]]$ApiEndpoints = $null
 
     ### Functions
+
+    ### Check if an endpoint is available
+    [bool]TestEndpoint($Api) {
+        foreach ($endpoint in $this.ApiEndpoints) {
+            if ($Api -match "^$endpoint") {
+                return $true
+            }
+        }
+        return $false
+    }
 
     ### Before calling a GET or POST URL, the token must be checked for validity.
     ### If the current access token is still valid, nothing happens
@@ -107,6 +118,9 @@ class NcentralClass {
     ### The access token is refreshed if necessary
     ### Returns an array of objects
     [System.Collections.ArrayList] Get([string]$Api) {
+        if ($false -eq $this.TestEndpoint($Api)) {
+            throw ("The endpoint for API call '{0}' is not available in the list of available endpoints '{1}'" -f $API, ($this.ApiEndpoints -join "', '"))
+        }
         $this.RefreshTokens()
         $URI = ("https://{0}/api/{1}" -f $this.APIHost, $Api)
         $continue = $true
@@ -136,6 +150,9 @@ class NcentralClass {
 
     ###
     [pscustomobject]GetRaw([string]$Api) {
+        if ($false -eq $this.TestEndpoint($Api)) {
+            throw ("The endpoint for API call '{0}' is not available in the list of available endpoints '{1}'" -f $API, ($this.ApiEndpoints -join "', '"))
+        }
         $this.RefreshTokens()
 
         $header = @{
@@ -156,6 +173,9 @@ class NcentralClass {
     ### The access token is refreshed if necessary
     ### Returns an array of objects
     [System.Collections.ArrayList]Post([string]$API, [System.Collections.HashTable]$Params) {
+        if ($false -eq $this.TestEndpoint($Api)) {
+            throw ("The endpoint for API call '{0}' is not available in the list of available endpoints '{1}'" -f $API, ($this.ApiEndpoints -join "', '"))
+        }
         $this.RefreshTokens()
         
         $result = [System.Collections.ArrayList]@()
@@ -216,7 +236,11 @@ class NcentralClass {
             $this.accesstoken = [NcentralToken]::New($tokens.tokens.access.token, $tokens.tokens.access.type, $tokens.tokens.access.expirySeconds)
             $this.refreshtoken = [NCentralToken]::New($tokens.tokens.refresh.token, $tokens.tokens.refresh.type, $tokens.tokens.refresh.expirySeconds)
             $this.IsConnected = $true
-
+            ### Add the available endpoints to the connection object
+            $apiinfo = Invoke-RestMethod -Uri "https://nfr.n-able.com/api"
+            $properties = ($apiinfo._links | get-member | Where-Object { $_.memberType -eq 'NoteProperty' }).name | Where-Object { $_ -ne 'root' }
+            $root = $apiinfo._links.root
+            $this.ApiEndpoints = $properties | ForEach-Object { $apiinfo._links.$_ -replace "^$root/",""  }
         } catch {
             $this.ErrorText = $Error[0].Exception.Message
             $this.IsConnected = $false
