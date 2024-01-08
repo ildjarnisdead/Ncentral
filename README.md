@@ -3,9 +3,19 @@
 In version 2023.9.0.25, N-Able added a new REST API to N-Central.
 For the old SOAP API there was already a PowerShell module, this module can be used to talk to the REST API
 
+# Supported versions
+
+With each new N-central version, new API endpoints become available, and new functionalities become available in existing endpoints.
+I will try to support at least 3 versions of N-central.
+If you use a version of NcentralRest not meant for the version of N-central it was written for, you may get errors, strange results, or miss functionality.
+
+| N-central version | NcentralRest version
+|---|---
+| 23.9.y.z | 1.0.x
+
 # Classes
 
-The module defines 4 new classes
+The module defines 4 new classes. All of them are for internal use of the module, but if you want to write your own code against the module classes, here are the definitions.
 
 ## NcentralClass
 
