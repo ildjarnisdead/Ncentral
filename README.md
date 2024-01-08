@@ -234,8 +234,9 @@ Default, it uses the LocalSystem credentials, if you want to override that you n
 If you want to pass arguments to the task, you need to create an NcentralScheduledTaskParameter object array for the `-Parameters` parameter.
 If you use the pipeline to feed the device(s) to this function, the device ID is added to the task name in order to create unique task names.
 The item ID can be found in the Script/Software Repository in the 'Repository ID' column.
-Note that the repository item must be enabled for the API (the 'Enable API' column toggle must be set to **on**), otherwise you'll get a '403 Forbidden' error.
-Also note that the name must be unique. If a direct support task with that exact name already exists, you get a '500 Internal Server' error.
+
+- Note that the repository item must be enabled for the API (the 'Enable API' column toggle must be set to **on**), otherwise you'll get a '403 Forbidden' error.
+- Also note that the name must be unique. If a direct support task with that exact name already exists, you get a '500 Internal Server' error.
 
 ### Example
 
