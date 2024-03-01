@@ -13,10 +13,12 @@
 Import-Module ./NcentralRest/NcentralRest.psm1
 
 # Define the URL and token values for the API call
-$ApiHost = "https://api.example.com/ncs"
-$jwt = ""
+$ApiHost = "ec2-35-175-196-175.compute-1.amazonaws.com"
+$jwt = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJTb2xhcndpbmRzIE1TUCBOLWNlbnRyYWwiLCJ1c2VyaWQiOjExNjQ4OTQwNjMsImlhdCI6MTcwOTMwODQxNn0.BrZ67p3d5SARFw4j7MzfFamnwEMlIkSH_v9n3eZiP3w"
 
-Connect-Ncentral -ApiHost $ApiHost -Key $jwt
+# Generate a secure string from the token $jwt
+$secureString = ConvertTo-SecureString -String $jwt -AsPlainText -Force
+Connect-Ncentral -ApiHost $ApiHost -Key $secureString
 
 # Get the list of Organization Units, and save the list to a Map collection using orgUnitId as the key
 $page = 1
@@ -66,14 +68,14 @@ do {
 
             # Resolve so_id, so_name, customer_id, customer_name, site_id, site_name depending on $BusinessUnit's orgUnitType (SO/CUSTOMER/SITE)
             if ($BusinessUnit.orgUnitType -eq "CUSTOMER") {
-                $SoUnit = $orgUnitMap[$BusinessUnit.parentId]
+                $SoUnit = $orgUnitMap[[string]$BusinessUnit.parentId]
                 $Customer = $BusinessUnit
                 $Site = $null
             }
             elseif ($BusinessUnit.orgUnitType -eq "SITE") {
                 $Site = $BusinessUnit
-                $Customer = $orgUnitMap[$BusinessUnit.parentId]
-                $SoUnit = $orgUnitMap[$Segment.parentId]
+                $Customer = $orgUnitMap[[string]$BusinessUnit.parentId]
+                $SoUnit = $orgUnitMap[[string]$Customer.parentId]
             }
             else {
                 # None of the above, so it's a SO ... skip it
@@ -94,7 +96,7 @@ do {
                 'Site ID'               = if ($Site) { $Site.orgUnitId } else { "" }
                 'Site Name'             = if ($Site) { $Site.orgUnitName } else { "" }
                 #'Site Windows Assets Discovered' = $SiteDeviceCount
-                'Site Total Assets'     = 0
+                'Site Total Assets'     = if ($Site) { 0 } else { "" }
                 #'Site Probe Count' = Get-ProbeCount($Site.CustomerID)
                 #'Site Discovery Started Date' =  Get-DiscoveryStartedDate($SiteProbe)
             }
@@ -128,7 +130,8 @@ foreach ($orgUnitId in $aggregatedReport.Keys) {
 # Generate the report by converting aggregatedReport to array then exporting to a CSV file
 $report = @()
 foreach ($aggregatedStruct in $aggregatedReport.Values) {
-    Write-Host "Customer ID: $($aggregatedStruct.'Customer ID'), SO Name: $($aggregatedStruct.'SO Name'), Customer Name: $($aggregatedStruct.'Customer Name'), Customer Total Assets: $($aggregatedStruct.'Customer Total Assets'), Site ID: $($aggregatedStruct.'Site ID'), Site Name: $($aggregatedStruct.'Site Name'), Site Total Assets: $($aggregatedStruct.'Site Total Assets')"
+    # Print debug info
+    # Write-Host "Customer ID: $($aggregatedStruct.'Customer ID'), SO Name: $($aggregatedStruct.'SO Name'), Customer Name: $($aggregatedStruct.'Customer Name'), Customer Total Assets: $($aggregatedStruct.'Customer Total Assets'), Site ID: $($aggregatedStruct.'Site ID'), Site Name: $($aggregatedStruct.'Site Name'), Site Total Assets: $($aggregatedStruct.'Site Total Assets')"
 
     $report += $aggregatedStruct
 }
