@@ -512,6 +512,69 @@ function Get-NcentralCustomer {
     return $Customers
 }
 
+
+<#
+    .SYNOPSIS
+    gets all orgunits (SO/customers/sites)
+
+    .DESCRIPTION
+    Gets all Organization Units that are visible for the N-central connection
+
+    .INPUTS
+    PageNumber - The page number to return
+    PageSize - The number of items to return
+    SortBy - The field to sort by
+    SortOrder - The order to sort by
+
+    .OUTPUTS
+    An array of organization unit objects
+
+    .PARAMETER All
+    By default, all customers are returned
+
+    .PARAMETER CustomerName
+    Returns only the customer(s) with the matching name.
+
+    .EXAMPLE
+    Get-NcentralCustomer
+
+#>
+function Get-NcentralOrgUnits {
+    [CmdletBinding(DefaultParametersetName = 'All')]
+    Param(
+        [parameter(Mandatory = $false, ParameterSetName = 'All')][switch]$All,
+        [parameter(Mandatory = $false)][int]$PageNumber,
+        [parameter(Mandatory = $false)][int]$PageSize,
+        [parameter(Mandatory = $false)][string]$SortBy,
+        [parameter(Mandatory = $false)][string]$SortOrder
+    )
+
+    Test-NcentralConnection
+    # Create a keypair structure to store non-null query parameters pageNumber, pageSize, sortBy, and sortOrder
+    $query = [System.Collections.Hashtable]@{}
+    if ($pageNumber -gt 0) {
+        $query.Add('pageNumber', $PageNumber) | Out-Null
+    }
+    if ($PageSize -gt 0) {
+        $query.Add('pageSize', $PageSize) | Out-Null
+    }
+    if (-not [string]::IsNullOrEmpty($SortBy)) {
+        $query.Add('sortBy', $SortBy) | Out-Null
+    }
+    if (-not [string]::IsNullOrEmpty($SortOrder)) {
+        $query.Add('sortOrder', $SortOrder) | Out-Null
+    }
+
+    # print the query to the console
+    Write-Verbose $query
+    
+    $Customers = $Global:_NcentralSession.get("org-units", $query)
+    if ($PSCmdlet.ParameterSetName -eq 'Customer') {
+        $customers = $customers | Where-object { $_.customerName -eq $CustomerName }
+    }
+    return $Customers
+}
+
 <#
     .SYNOPSIS
     Gets device information
@@ -1011,6 +1074,7 @@ Export-ModuleMember -Function Disconnect-Ncentral
 Export-ModuleMember -Function Get-NcentralServerInfo
 Export-ModuleMember -Function Get-NcentralServerHealth
 Export-ModuleMember -Function Get-NcentralCustomer
+Export-ModuleMember -Function Get-NcentralOrgUnits
 Export-ModuleMember -Function Get-NcentralDevice
 Export-ModuleMember -Function Get-NcentralDeviceByName
 Export-ModuleMember -Function Get-NcentralDeviceScheduledTask
