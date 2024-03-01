@@ -13,8 +13,8 @@
 Import-Module ./NcentralRest/NcentralRest.psm1
 
 # Define the URL and token values for the API call
-$ApiHost = "ec2-35-175-196-175.compute-1.amazonaws.com"
-$jwt = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJTb2xhcndpbmRzIE1TUCBOLWNlbnRyYWwiLCJ1c2VyaWQiOjExNjQ4OTQwNjMsImlhdCI6MTcwOTMwODQxNn0.BrZ67p3d5SARFw4j7MzfFamnwEMlIkSH_v9n3eZiP3w"
+$ApiHost = "example.n-able.com"
+$jwt = "<JWT TOKEN>"
 
 # Generate a secure string from the token $jwt
 $secureString = ConvertTo-SecureString -String $jwt -AsPlainText -Force
