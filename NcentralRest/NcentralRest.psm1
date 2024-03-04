@@ -92,14 +92,15 @@ class NcentralClass {
             Invoke-RestMethod -Uri ("https://{0}/api/auth/validate" -f $this.ApiHost) -Headers $header -ErrorAction Stop | Out-Null
             Write-Verbose "Token is still valid, not refreshing"
             return
-        } catch {
+        }
+        catch {
             Write-Verbose "Token is no longer valid. Trying to refresh"
         }
 
         ### Try to refresh
         [System.Collections.HashTable]$header = @{}
-        $header.Add('X-ACCESS-EXPIRY-OVERRIDE',('{0}s' -f $this.AccessToken.expirySeconds)) | Out-Null
-        $header.Add('X-REFRESH-EXPIRY-OVERRIDE',('{0}s' -f $this.RefreshToken.expirySeconds)) | Out-Null
+        $header.Add('X-ACCESS-EXPIRY-OVERRIDE', ('{0}s' -f $this.AccessToken.expirySeconds)) | Out-Null
+        $header.Add('X-REFRESH-EXPIRY-OVERRIDE', ('{0}s' -f $this.RefreshToken.expirySeconds)) | Out-Null
         try {
             $tokens = Invoke-Restmethod -Uri ("https://{0}/api/auth/refresh" -f $this.ApiHost) -Method Post -Body $this.RefreshToken.token -Headers $header -ErrorAction Stop
             $this.AccessToken = [NcentralToken]::New($tokens.tokens.access.token, $tokens.tokens.access.type, $tokens.tokens.access.expirySeconds)
@@ -123,7 +124,7 @@ class NcentralClass {
     ### Used for GET operations where the results are returned in a data field, possibly with pagination
     ### The access token is refreshed if necessary
     ### Returns an array of objects
-    [System.Collections.ArrayList] Get([string]$Api, [System.Collections.Hashtable]$QueryParams) {
+    [System.Collections.ArrayList] Get([string]$Api, [System.Collections.Hashtable]$QueryParams, [bool]$All = $false) {
         if ($false -eq $this.TestEndpoint($Api)) {
             throw ("The endpoint for API call '{0}' is not available in the list of available endpoints '{1}'" -f $API, ($this.ApiEndpoints -join "', '"))
         }
@@ -140,7 +141,8 @@ class NcentralClass {
 
         $URI = ("https://{0}/api/{1}{2}" -f $this.ApiHost, $Api, $query)
 
-        $continue = $true
+        $continue = $All
+        Write-Verbose "Calling URI $URI with all = $All"
         $result = [System.Collections.ArrayList]@()
         $header = @{
             Authorization  = ("{0} {1}" -f $this.AccessToken.Type, $this.AccessToken.Token)
@@ -158,14 +160,15 @@ class NcentralClass {
             foreach ($d in $tmp.data) {
                 $result.Add($d) | Out-Null
             }
+            # Print Debug info
+            # Write-Host "Result: $(ConvertTo-Json $tmp)"
             if ($tmp._links.nextPage.length) {
                 $URI = ("https://{0}{1}" -f $this.ApiHost, $tmp._links.nextpage)
             }
             else {
                 $continue = $false
             }
-            # Temporary measure to prevent infinite loops
-            $continue = $false
+            Write-Verbose "Should continue: $continue"
         } until ($false -eq $continue)
         return $result
     }
@@ -256,7 +259,16 @@ class NcentralClass {
         }
         Write-Verbose "URL = $URI"
         try {
+            # Print the URL and header to the console
+            Write-Verbose ("Calling URL {0} with header" -f $URI)
+            # print header content
+            Write-Verbose $postheader
+            foreach ($entry in $postheader.GetEnumerator()) {
+                Write-Verbose ("{0} = {1}" -f $entry.Key, $entry.Value)
+            }
             $tokens = Invoke-RestMethod -Uri $URI -Headers $postheader -Method Post
+            # Print http response to console
+            Write-Verbose "HTTP response: $tokens"
             $this.AccessToken = [NcentralToken]::New($tokens.tokens.access.token, $tokens.tokens.access.type, $tokens.tokens.access.expirySeconds)
             $this.RefreshToken = [NCentralToken]::New($tokens.tokens.refresh.token, $tokens.tokens.refresh.type, $tokens.tokens.refresh.expirySeconds)
             $this.IsConnected = $true
@@ -479,11 +491,10 @@ function Get-NcentralCustomer {
     Param(
         [parameter(Mandatory = $false, ParameterSetName = 'All')][switch]$All,
         [parameter(Mandatory = $false, ParameterSetName = 'Customer')][string]$CustomerName,
-        [parameter(Mandatory = $false)][int]$CustomerId,
-        [parameter(Mandatory = $false)][int]$PageNumber,
-        [parameter(Mandatory = $false)][int]$PageSize,
-        [parameter(Mandatory = $false)][string]$SortBy,
-        [parameter(Mandatory = $false)][string]$SortOrder
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][int]$PageNumber,
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][int]$PageSize,
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][string]$SortBy,
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][string]$SortOrder
     )
 
     Test-NcentralConnection
@@ -503,11 +514,18 @@ function Get-NcentralCustomer {
     }
 
     # print the query to the console
-    Write-Verbose $query
+    Write-Verbose "Query: $query, All: $All"
     
-    $Customers = $Global:_NcentralSession.get("customers", $query)
     if ($PSCmdlet.ParameterSetName -eq 'Customer') {
+        $Customers = $Global:_NcentralSession.get("customers", $query, $false)
         $customers = $customers | Where-object { $_.customerName -eq $CustomerName }
+    }
+    elseif ($PSCmdlet.ParameterSetName -eq 'All') {
+        Write-Verbose "*** *** Getting all customers"
+        $Customers = $Global:_NcentralSession.get("customers", $query, $true)
+    }
+    else {
+        $Customers = $Global:_NcentralSession.get("customers", $query, $false)
     }
     return $Customers
 }
@@ -543,10 +561,10 @@ function Get-NcentralOrgUnits {
     [CmdletBinding(DefaultParametersetName = 'All')]
     Param(
         [parameter(Mandatory = $false, ParameterSetName = 'All')][switch]$All,
-        [parameter(Mandatory = $false)][int]$PageNumber,
-        [parameter(Mandatory = $false)][int]$PageSize,
-        [parameter(Mandatory = $false)][string]$SortBy,
-        [parameter(Mandatory = $false)][string]$SortOrder
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][int]$PageNumber,
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][int]$PageSize,
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][string]$SortBy,
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][string]$SortOrder
     )
 
     Test-NcentralConnection
@@ -568,9 +586,12 @@ function Get-NcentralOrgUnits {
     # print the query to the console
     Write-Verbose $query
     
-    $Customers = $Global:_NcentralSession.get("org-units", $query)
-    if ($PSCmdlet.ParameterSetName -eq 'Customer') {
-        $customers = $customers | Where-object { $_.customerName -eq $CustomerName }
+    $Customers = $null
+    if ($PSCmdlet.ParameterSetName -eq 'All') {
+        $Customers = $Global:_NcentralSession.get("org-units", $query, $true)
+    }
+    else {
+        $Customers = $Global:_NcentralSession.get("org-units", $query, $false)
     }
     return $Customers
 }
@@ -631,10 +652,10 @@ function Get-NcentralDevice {
         [parameter(Mandatory = $false, ParameterSetName = 'All')][switch]$All,
         [parameter(Mandatory = $true, ParameterSetName = 'Device', ValueFromPipelineByPropertyName = $true)][int[]]$DeviceId,
         [parameter(Mandatory = $true, ParameterSetName = 'Customer', ValueFromPipelineByPropertyName = $true)][int[]]$CustomerId,
-        [parameter(Mandatory = $false)][int]$PageNumber,
-        [parameter(Mandatory = $false)][int]$PageSize,
-        [parameter(Mandatory = $false)][string]$SortBy,
-        [parameter(Mandatory = $false)][string]$SortOrder
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][int]$PageNumber,
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][int]$PageSize,
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][string]$SortBy,
+        [parameter(Mandatory = $false, ParameterSetName = 'Query')][string]$SortOrder
     )
 
     begin {
@@ -656,19 +677,20 @@ function Get-NcentralDevice {
         if (-not [string]::IsNullOrEmpty($SortOrder)) {
             $query.Add('sortOrder', $SortOrder) | Out-Null
         }
-
-        if ($null -eq $deviceId) {
-            $API = "devices"
-            $devices = $Global:_NcentralSession.Get($API, $query)
-        }
     }
 
     process {
+        Write-Verbose ("Processing parameter set {0}" -f $PSCmdlet.ParameterSetName)
         switch ($PSCmdlet.ParameterSetName) {
             'All' {
+                Write-Verbose "No device ID given, getting all devices"
+                $API = "devices"
+                $devices = $Global:_NcentralSession.Get($API, $query, $true)
                 $allDevices.AddRange($devices) | Out-Null
+                Write-Verbose ("Got {0} devices" -f $devices.Count)
             }
             'Customer' {
+                # TODO: This was not working as expected, since scanning the system for ALL devices causes a performance hit on the system.
                 foreach ($d in $devices) {
                     if ($addIds.keys -notcontains $d.deviceId -and $customerId -contains $d.customerId) {
                         Write-Verbose ("Add device ID {0} to output list" -f $d.deviceId)
@@ -685,13 +707,21 @@ function Get-NcentralDevice {
                     if ($addIds.keys -notcontains $DeviceId) {
                         Write-Verbose ("Add device ID {0} to output list" -f $d.deviceId)
                         $API = ("devices/{0}" -f $d)
-                        $device = $Global:_NcentralSession.Get($API, $query)
+                        $device = $Global:_NcentralSession.Get($API, @{}, $false)
                         $addIds[$device.deviceId] = $true
                         $alldevices.Add($device) | Out-Null
-                    } else {
+                    }
+                    else {
                         Write-Verbose ("Skipping device ID {0} as it is already in the list" -f $d.deviceId)
                     }
                 }
+            }
+            'Query' {
+                $API = "devices"
+                $devices = $Global:_NcentralSession.Get($API, $query, $false)
+                $allDevices.AddRange($devices) | Out-Null
+                Write-Verbose ("Got {0} devices" -f $devices.Count)
+            
             }
         }
     }
@@ -733,8 +763,8 @@ function Get-NcentralDevice {
 function Get-NcentralDeviceByName {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true,ValueFromPipeline=$true)][string[]]$DeviceName,
-        [parameter(Mandatory=$false)][int]$CustomerId = $null
+        [parameter(Mandatory = $true, ValueFromPipeline = $true)][string[]]$DeviceName,
+        [parameter(Mandatory = $false)][int]$CustomerId = $null
     )
 
     begin {
@@ -742,7 +772,7 @@ function Get-NcentralDeviceByName {
         $alldevices = [System.Collections.ArrayList]@()
         $addIds = [System.Collections.Hashtable]@{}
         $API = "devices"
-        $devices = $Global:_NcentralSession.Get($API)
+        $devices = $Global:_NcentralSession.Get($API, @{}, $false)
     }
 
     process {
@@ -755,10 +785,12 @@ function Get-NcentralDeviceByName {
                     Write-Verbose ("Add device ID {0} to output list" -f $d.deviceId)
                     $alldevices.Add($d) | Out-Null
                     $addIds[$d.deviceId] = $true
-                } else {
+                }
+                else {
                     Write-Verbose ("Skipping device ID {0} as it is already in the list" -f $d.deviceId)
                 }
-            } else {
+            }
+            else {
                 Write-Verbose ("Skipping device ID {0} as does not match the filter" -f $d.deviceId)
             }
         }
@@ -798,7 +830,7 @@ function Get-NcentralDeviceByName {
 function Get-NcentralDeviceScheduledTask {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true,ValueFromPipelineByPropertyName=$true)][int[]]$DeviceId
+        [parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)][int[]]$DeviceId
     )
 
     begin {
@@ -810,7 +842,7 @@ function Get-NcentralDeviceScheduledTask {
         foreach ($d in $DeviceId) {
             $API = ("devices/{0}/scheduled-tasks" -f $d)
             Try {
-                $tasks = $global:_NcentralSession.Get($API)
+                $tasks = $global:_NcentralSession.Get($API, @{}, $false)
                 foreach ($t in $tasks) {
                     if ($addIds.Keys -notcontains $t.taskId) {
                         $alltasks.add($t) | Out-Null
@@ -863,9 +895,9 @@ function Get-NcentralDeviceScheduledTask {
 function Get-NcentralScheduledTask {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true, ValueFromPipelineByPropertyName=$true)][int[]]$TaskId,
-        [parameter(Mandatory=$false)][switch]$Status = $false,
-        [parameter(Mandatory=$false)][switch]$Details = $false
+        [parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)][int[]]$TaskId,
+        [parameter(Mandatory = $false)][switch]$Status = $false,
+        [parameter(Mandatory = $false)][switch]$Details = $false
     )
 
     begin {
@@ -883,7 +915,7 @@ function Get-NcentralScheduledTask {
                 }
             }
         }
-        $tasks = $Global:_NcentralSession.get($API)
+        $tasks = $Global:_NcentralSession.get($API, @{}, $false)
         $alltasks.AddRange($tasks)
     }
 
