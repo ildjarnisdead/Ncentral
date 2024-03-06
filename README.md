@@ -3,9 +3,19 @@
 In version 2023.9.0.25, N-Able added a new REST API to N-Central.
 For the old SOAP API there was already a PowerShell module, this module can be used to talk to the REST API
 
+# Supported versions
+
+With each new N-central version, new API endpoints become available, and new functionalities become available in existing endpoints.
+I will try to support at least 3 versions of N-central.
+If you use a version of NcentralRest not meant for the version of N-central it was written for, you may get errors, strange results, or miss functionality.
+
+| N-central version | NcentralRest version
+|---|---
+| 23.9.y.z | 1.0.x
+
 # Classes
 
-The module defines 4 new classes
+The module defines 4 new classes. All of them are for internal use of the module, but if you want to write your own code against the module classes, here are the definitions.
 
 ## NcentralClass
 
@@ -25,7 +35,8 @@ All public functions check whether the API endpoint is supported in the version 
 | Method | Availability | Type | Parameters | Description
 |---|---|---|---|---
 | Get | Public | System.Collections.ArrayList | ApiEndpoint | Used for paginated GET requests.
-| GetRaw | Public | pscustomobject | ApiEndpoint | Used for non-paginated GET requests.
+| Get | Public | System.Collections.ArrayList | ApiEndpoint, Filter, Exactmatch | Used for paginated GET responses with a filter. The third parameter determines whether the filter is an exact match or a regular expression match
+| GetOne | Public | pscustomobject | ApiEndpoint | Used for non-paginated GET requests.
 | Post | Public | System.Collections.ArrayList | ApiEndpoint, Body | Used for POST requests.
 | TestEndpoint | Private | Bool | ApiEndpoint | Tests whether the called endpoint is supported by the N-central server you're connected to
 | RefreshTokens | Private | Void | None | Refreshes the access and refresh tokens when the access token is expired
@@ -224,8 +235,9 @@ Default, it uses the LocalSystem credentials, if you want to override that you n
 If you want to pass arguments to the task, you need to create an NcentralScheduledTaskParameter object array for the `-Parameters` parameter.
 If you use the pipeline to feed the device(s) to this function, the device ID is added to the task name in order to create unique task names.
 The item ID can be found in the Script/Software Repository in the 'Repository ID' column.
-Note that the repository item must be enabled for the API (the 'Enable API' column toggle must be set to **on**), otherwise you'll get a '403 Forbidden' error.
-Also note that the name must be unique. If a direct support task with that exact name already exists, you get a '500 Internal Server' error.
+
+- Note that the repository item must be enabled for the API (the 'Enable API' column toggle must be set to **on**), otherwise you'll get a '403 Forbidden' error.
+- Also note that the name must be unique. If a direct support task with that exact name already exists, you get a '500 Internal Server' error.
 
 ### Example
 
