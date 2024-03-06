@@ -132,14 +132,14 @@ class NcentralClass {
         $URI = ("https://{0}/api/{1}?pageSize=1000" -f $this.ApiHost, $Api)
         $continue = $true
         $result = [System.Collections.ArrayList]@()
-        $header = @{
-            Authorization  = ("{0} {1}" -f $this.AccessToken.Type, $this.AccessToken.Token)
-            'Content-Type' = "application/json"
-        }
         Write-Debug ("Getting endpoint {0}" -f $Api)
         do {
             Write-Debug "Calling URI $URI"
             $this.RefreshTokens()
+            $header = @{
+                Authorization  = ("{0} {1}" -f $this.AccessToken.Type, $this.AccessToken.Token)
+                'Content-Type' = "application/json"
+            }
             Remove-Variable tmp -Force -ErrorAction SilentlyContinue
             try {
                 $tmp = Invoke-RestMethod -Uri $URI -Headers $header -Method GET -Verbose:$false
@@ -172,14 +172,15 @@ class NcentralClass {
         $URI = ("https://{0}/api/{1}?pageSize=1000" -f $this.ApiHost, $Api)
         $continue = $true
         $result = [System.Collections.ArrayList]@()
-        $header = @{
-            Authorization  = ("{0} {1}" -f $this.AccessToken.Type, $this.AccessToken.Token)
-            'Content-Type' = "application/json"
-        }
+
         Write-Debug ("Getting API endpoint {0} with filter {1}, exactmatch is {2}" -f $API, (ConvertTo-Json -InputObject $Filter -Compress), $ExactMatch)
         do {
             Write-Debug "Calling URI $URI"
             $this.RefreshTokens()
+            $header = @{
+                Authorization  = ("{0} {1}" -f $this.AccessToken.Type, $this.AccessToken.Token)
+                'Content-Type' = "application/json"
+            }
             Remove-Variable tmp -Force -ErrorAction SilentlyContinue
             try {
                 $tmp = Invoke-RestMethod -Uri $URI -Headers $header -Method GET -Verbose:$false
@@ -517,12 +518,15 @@ function Get-NcentralServerHealth {
     .PARAMETER CustomerName
     Returns only the customer(s) with the matching name.
 
+    .PARAMETER ExactMatch
+    Whether the CustomerName should be matched exactly or should be matched with a wildcard
+
     .EXAMPLE
     PS> Get-NcentralCustomer
     Gets all customers
 
     .EXAMPLE
-    PS> 'Customer1', 'Customer2' | Get-NcentralCustomer
+    PS> 'Customer1', 'Customer2' | Get-NcentralCustomer -ExactMatch
     Gets certain customers by specifying the names as pipeline values
 
     .EXAMPLE
@@ -588,9 +592,6 @@ function Get-NcentralCustomer {
     .PARAMETER DeviceId
     A device ID (or a list of device IDs, possibly from objects from the pipeline).
 
-    .PARAMETER scheduledTasks
-    If this switch is given, instead of devices the list of scheduled tasks from the input devices are returned
-
     .PARAMETER CustomerId
     A customer ID to limit the returned objects
 
@@ -599,7 +600,7 @@ function Get-NcentralCustomer {
     Get all devices from the N-central server
 
     .EXAMPLE
-    PS> Get-NcentralCustomer -CustomerName "ORGANISATION" | Get-NcentralDevice
+    PS> Get-NcentralCustomer -CustomerName "ORGANISATION" -ExactMatch | Get-NcentralDevice
     Get all devices associated with customer name "ORGANISATION"
 
     .EXAMPLE
@@ -681,6 +682,9 @@ function Get-NcentralDevice {
     .PARAMETER DeviceName
     Only devices matching the exact name are returned
 
+    .PARAMETER ExactMatch
+    Whether matching should be done by using a regular expression or by exact match
+
     .PARAMETER CustomerId
     Limit the results to a single customer.
 
@@ -696,7 +700,8 @@ function Get-NcentralDeviceByName {
     [CmdletBinding()]
     Param(
         [parameter(Mandatory = $true, ValueFromPipeline = $true)][string[]]$DeviceName,
-        [parameter(Mandatory = $false)][int]$CustomerId = $null
+        [parameter(Mandatory = $false)][int]$CustomerId = [int]$null,
+        [parameter(Mandatory = $false)][switch]$ExactMatch
     )
 
     begin {
@@ -713,14 +718,14 @@ function Get-NcentralDeviceByName {
                 $DeviceFilter['longName'].Add($d) | Out-Null
             }
         }
-        if ($null -ne $customerId) {
+        if ([int]$null -ne $customerId) {
             Write-Debug "Adding $customerId to customerId filter"
             $DeviceFilter['customerId'] = @($customerId)
         }
     }
 
     end {
-        return $global:_NcentralSession.Get('devices', $DeviceFilter, $false)
+        return $global:_NcentralSession.Get('devices', $DeviceFilter, $ExactMatch)
     }
 }
 
