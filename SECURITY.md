@@ -10,4 +10,8 @@ The currently supported versions are:
 
 ## Reporting a Vulnerability
 
-Please create an issue if you find a security vulnerability
+Please use the Security - Report a vulnerability button to report issues.
+
+## Reporting bugs
+
+Please create an issue in the Issue menu if you find non-security bugs.
