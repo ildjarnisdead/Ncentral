@@ -35,7 +35,8 @@ All public functions check whether the API endpoint is supported in the version 
 | Method | Availability | Type | Parameters | Description
 |---|---|---|---|---
 | Get | Public | System.Collections.ArrayList | ApiEndpoint | Used for paginated GET requests.
-| GetRaw | Public | pscustomobject | ApiEndpoint | Used for non-paginated GET requests.
+| Get | Public | System.Collections.ArrayList | ApiEndpoint, Filter, Exactmatch | Used for paginated GET responses with a filter. The third parameter determines whether the filter is an exact match or a regular expression match
+| GetOne | Public | pscustomobject | ApiEndpoint | Used for non-paginated GET requests.
 | Post | Public | System.Collections.ArrayList | ApiEndpoint, Body | Used for POST requests.
 | TestEndpoint | Private | Bool | ApiEndpoint | Tests whether the called endpoint is supported by the N-central server you're connected to
 | RefreshTokens | Private | Void | None | Refreshes the access and refresh tokens when the access token is expired

@@ -1,5 +1,5 @@
 ﻿### (C) 2023, 2024 KEMBIT B.V.
-### Version: 1.0.0
+### Version: 1.0.2
 
 ### Helper classes
 class NcentralScheduledTaskCredential {
@@ -10,7 +10,7 @@ class NcentralScheduledTaskCredential {
     ### Constructor
     NcentralScheduledTaskCredential([string]$Type, [string]$UserName, [securestring]$Password) {
         $decryptedpwd = ([Net.NetworkCredential]::New('', $Password)).password
-        if ($Type -notin @('LocalSystem','CustomCredentials', 'DeviceCredentials')) {
+        if ($Type -notin @('LocalSystem', 'CustomCredentials', 'DeviceCredentials')) {
             throw ("Invalid type {0}" -f $type)
         }
         if (($Type -eq 'LocalSystem' -or $Type -eq 'DeviceCredentials') -and ($UserName.length -ne 0 -or $decryptedpwd.length -ne 0)) {
@@ -23,7 +23,8 @@ class NcentralScheduledTaskCredential {
         if ($type -eq 'CustomCredentials') {
             $this.username = $UserName
             $this.password = $decryptedpwd
-        } else {
+        }
+        else {
             $this.username = $null
             $this.password = $null
         }
@@ -35,7 +36,7 @@ class NcentralScheduledTaskParameter {
     [string]$value
 
     ### Constructor
-    NcentralScheduledTaskParameter([string]$Name,[string]$Value) {
+    NcentralScheduledTaskParameter([string]$Name, [string]$Value) {
         if ($null -eq $Name) {
             throw ("Name should not be null")
         }
@@ -88,20 +89,21 @@ class NcentralClass {
         ### Test to see if the current token is still valid
         try {
             [System.Collections.HashTable]$header = @{}
-            $header.Add('Authorization',('{0} {1}' -f $this.AccessToken.Type, $this.AccessToken.token)) | Out-Null
-            Invoke-RestMethod -Uri ("https://{0}/api/auth/validate" -f $this.ApiHost) -Headers $header -ErrorAction Stop | Out-Null
+            $header.Add('Authorization', ('{0} {1}' -f $this.AccessToken.Type, $this.AccessToken.token)) | Out-Null
+            Invoke-RestMethod -Uri ("https://{0}/api/auth/validate" -f $this.ApiHost) -Headers $header -ErrorAction Stop -Verbose:$false | Out-Null
             Write-Verbose "Token is still valid, not refreshing"
             return
-        } catch {
+        }
+        catch {
             Write-Verbose "Token is no longer valid. Trying to refresh"
         }
 
         ### Try to refresh
         [System.Collections.HashTable]$header = @{}
-        $header.Add('X-ACCESS-EXPIRY-OVERRIDE',('{0}s' -f $this.AccessToken.expirySeconds)) | Out-Null
-        $header.Add('X-REFRESH-EXPIRY-OVERRIDE',('{0}s' -f $this.RefreshToken.expirySeconds)) | Out-Null
+        $header.Add('X-ACCESS-EXPIRY-OVERRIDE', ('{0}s' -f $this.AccessToken.expirySeconds)) | Out-Null
+        $header.Add('X-REFRESH-EXPIRY-OVERRIDE', ('{0}s' -f $this.RefreshToken.expirySeconds)) | Out-Null
         try {
-            $tokens = Invoke-Restmethod -Uri ("https://{0}/api/auth/refresh" -f $this.ApiHost) -Method Post -Body $this.RefreshToken.token -Headers $header -ErrorAction Stop
+            $tokens = Invoke-Restmethod -Uri ("https://{0}/api/auth/refresh" -f $this.ApiHost) -Method Post -Body $this.RefreshToken.token -Headers $header -ErrorAction Stop -Verbose:$false
             $this.AccessToken = [NcentralToken]::New($tokens.tokens.access.token, $tokens.tokens.access.type, $tokens.tokens.access.expirySeconds)
             $this.RefreshToken = [NCentralToken]::New($tokens.tokens.refresh.token, $tokens.tokens.refresh.type, $tokens.tokens.refresh.expirySeconds)
             $this.IsConnected = $true
@@ -127,20 +129,22 @@ class NcentralClass {
         if ($false -eq $this.TestEndpoint($Api)) {
             throw ("The endpoint for API call '{0}' is not available in the list of available endpoints '{1}'" -f $API, ($this.ApiEndpoints -join "', '"))
         }
-        $this.RefreshTokens()
-        $URI = ("https://{0}/api/{1}" -f $this.ApiHost, $Api)
+        $URI = ("https://{0}/api/{1}?pageSize=1000" -f $this.ApiHost, $Api)
         $continue = $true
         $result = [System.Collections.ArrayList]@()
         $header = @{
-            Authorization = ("{0} {1}" -f $this.AccessToken.Type, $this.AccessToken.Token)
+            Authorization  = ("{0} {1}" -f $this.AccessToken.Type, $this.AccessToken.Token)
             'Content-Type' = "application/json"
         }
+        Write-Debug ("Getting endpoint {0}" -f $Api)
         do {
-            Write-Verbose "Calling URI $URI"
+            Write-Debug "Calling URI $URI"
+            $this.RefreshTokens()
             Remove-Variable tmp -Force -ErrorAction SilentlyContinue
             try {
-                $tmp = Invoke-RestMethod -Uri $URI -Headers $header -Method GET
-            } catch {
+                $tmp = Invoke-RestMethod -Uri $URI -Headers $header -Method GET -Verbose:$false
+            }
+            catch {
                 throw ("Error invoking GET to URL $URI")
             }
             foreach ($d in $tmp.data) {
@@ -148,29 +152,86 @@ class NcentralClass {
             }
             if ($tmp._links.nextPage.length) {
                 $URI = ("https://{0}{1}" -f $this.ApiHost, $tmp._links.nextpage)
-            } else {
+            }
+            else {
                 $continue = $false
             }
         } until ($false -eq $continue)
         return $result
     }
 
-    ### Used for raw results where there is no data field and no pagination
+    ### Used for GET operations where the results are returned in a data field, possibly with pagination
+    ### The access token is refreshed if necessary
+    ### Returns an array of objects
+    ### Filter is a hashtable of property:value sets which should match
+    ### If exactMatch is true, all fields must match exactly, otherwise a regular expression match is used
+    [System.Collections.ArrayList] Get([string]$Api, [System.Collections.HashTable]$Filter, [bool]$ExactMatch) {
+        if ($false -eq $this.TestEndpoint($Api)) {
+            throw ("The endpoint for API call '{0}' is not available in the list of available endpoints '{1}'" -f $API, ($this.ApiEndpoints -join "', '"))
+        }
+        $URI = ("https://{0}/api/{1}?pageSize=1000" -f $this.ApiHost, $Api)
+        $continue = $true
+        $result = [System.Collections.ArrayList]@()
+        $header = @{
+            Authorization  = ("{0} {1}" -f $this.AccessToken.Type, $this.AccessToken.Token)
+            'Content-Type' = "application/json"
+        }
+        Write-Debug ("Getting API endpoint {0} with filter {1}, exactmatch is {2}" -f $API, (ConvertTo-Json -InputObject $Filter -Compress), $ExactMatch)
+        do {
+            Write-Debug "Calling URI $URI"
+            $this.RefreshTokens()
+            Remove-Variable tmp -Force -ErrorAction SilentlyContinue
+            try {
+                $tmp = Invoke-RestMethod -Uri $URI -Headers $header -Method GET -Verbose:$false
+            }
+            catch {
+                throw ("Error invoking GET to URL $URI")
+            }
+            foreach ($d in $tmp.data) {
+                $matched = $true
+                foreach ($k in $filter.keys) {
+                    if ($true -eq $ExactMatch) {
+                        if ($d.$k -notin $filter[$k]) {
+                            $matched = $false
+                        }
+                    }
+                    else {
+                        $matchfilter = $filter[$k] -join '|'
+                        if ($d.$k -notmatch $matchfilter) {
+                            $matched = $false
+                        }
+                    }
+                }
+                if ($true -eq $matched) {
+                    $result.Add($d) | Out-Null
+                }
+            }
+            if ($tmp._links.nextPage.length) {
+                $URI = ("https://{0}{1}" -f $this.ApiHost, $tmp._links.nextpage)
+            }
+            else {
+                $continue = $false
+            }
+        } until ($false -eq $continue)
+        return $result
+    }
+
+    ### Used for API calls which return one item, instead of a paginated result
     ### The access token is refreshed if necessary
     ### Returns a pscustomobject
-    [pscustomobject]GetRaw([string]$Api) {
+    [pscustomobject]GetOne([string]$Api) {
         if ($false -eq $this.TestEndpoint($Api)) {
             throw ("The endpoint for API call '{0}' is not available in the list of available endpoints '{1}'" -f $API, ($this.ApiEndpoints -join "', '"))
         }
         $this.RefreshTokens()
 
         $header = @{
-            Authorization = ("{0} {1}" -f $this.AccessToken.type, $this.AccessToken.token)
+            Authorization  = ("{0} {1}" -f $this.AccessToken.type, $this.AccessToken.token)
             'Content-Type' = "application/json"
         }
         $URI = "https://{0}/api/{1}" -f $this.ApiHost, $Api
         try {
-            $result = Invoke-Restmethod -Uri $URI -Headers $header
+            $result = Invoke-Restmethod -Uri $URI -Headers $header -Verbose:$false
             return $result
         }
         catch {
@@ -193,10 +254,10 @@ class NcentralClass {
         }
         $body = ConvertTo-Json -InputObject $Params -Depth 99 -Compress
         $URI = ("https://{0}/api/{1}" -f $this.ApiHost, $API)
-        Write-Verbose ("Calling URL {0} with body {1}" -f $URI, $body)
+        Write-Debug ("Initiating POST to URL {0} with body {1}" -f $URI, $body)
         $PostError = $null
         try {
-            $tmp = Invoke-RestMethod -URI $URI -Method Post -Headers $header -Body $body -ContentType "application/json" -ErrorVariable PostError -ErrorAction Stop
+            $tmp = Invoke-RestMethod -URI $URI -Method Post -Headers $header -Body $body -ContentType "application/json" -ErrorVariable PostError -ErrorAction Stop -Verbose:$false
         }
         catch {
             throw("POST to URL {0} resulted in the following error: {1}" -f $URI, $PostError.message)
@@ -222,8 +283,8 @@ class NcentralClass {
             $RefreshExpiry = 0
         }
 
-        if ((3*$AccessExpiry) -gt $RefreshExpiry) {
-            throw(("The refresh expiry ({0} seconds) should be at least 3 times the access expiry ({1} seconds), aborting" -f $refreshexpiry,$accessExpiry))
+        if ((3 * $AccessExpiry) -gt $RefreshExpiry) {
+            throw(("The refresh expiry ({0} seconds) should be at least 3 times the access expiry ({1} seconds), aborting" -f $refreshexpiry, $accessExpiry))
         }
 
         $this.ApiHost = $ApiHost
@@ -234,24 +295,25 @@ class NcentralClass {
         $postheader.add('Authorization', ("Bearer {0}" -f $jwt)) | Out-Null
 
         if (0 -ne $AccessExpiry) {
-            $postheader.add('X-ACCESS-EXPIRY-OVERRIDE',('{0}s' -f $AccessExpiry)) | Out-Null
+            $postheader.add('X-ACCESS-EXPIRY-OVERRIDE', ('{0}s' -f $AccessExpiry)) | Out-Null
         }
         if (0 -ne $RefreshExpiry) {
-            $postheader.add('X-REFRESH-EXPIRY-OVERRIDE', ('{0}s' -f$RefreshExpiry)) | Out-Null
+            $postheader.add('X-REFRESH-EXPIRY-OVERRIDE', ('{0}s' -f $RefreshExpiry)) | Out-Null
         }
-        Write-Verbose "URL = $URI"
+        Write-Debug "URL = $URI"
         try {
-            $tokens = Invoke-RestMethod -Uri $URI -Headers $postheader -Method Post
+            $tokens = Invoke-RestMethod -Uri $URI -Headers $postheader -Method Post -Verbose:$false
             $this.AccessToken = [NcentralToken]::New($tokens.tokens.access.token, $tokens.tokens.access.type, $tokens.tokens.access.expirySeconds)
             $this.RefreshToken = [NCentralToken]::New($tokens.tokens.refresh.token, $tokens.tokens.refresh.type, $tokens.tokens.refresh.expirySeconds)
             $this.IsConnected = $true
             $this.ErrorText = $null
-            ### Add the available endpoints to teh connection object
-            $apiinfo = Invoke-RestMethod -Uri ("https://{0}/api" -f $this.ApiHost)
+            ### Add the available endpoints to the connection object
+            $apiinfo = Invoke-RestMethod -Uri ("https://{0}/api" -f $this.ApiHost) -Verbose:$false
             $properties = ($apiinfo._links | Get-Member | Where-Object { $_.MemberType -eq 'NoteProperty' }).Name | Where-Object { $_ -ne 'root' }
             $root = $apiinfo._links.root
-            $this.ApiEndpoints = $properties | ForEach-Object { $apiinfo._links.$_ -replace "^$root/",""  }
-        } catch {
+            $this.ApiEndpoints = $properties | ForEach-Object { $apiinfo._links.$_ -replace "^$root/", "" }
+        }
+        catch {
             $this.ErrorText = $Error[0].Exception.Message
             $this.IsConnected = $false
             $this.AccessToken = $null
@@ -297,28 +359,29 @@ class NcentralClass {
     The refresh expiry duration must be at least 3 times the access expiry duration
 
     .EXAMPLE
-    $Key = Read-Host -AsSecureString "JWT token"
-    Connect-Ncentral -Key $key -ApiHost ncentral.organisation.com
+    PS> $Key = Read-Host -AsSecureString "JWT token"
+    PS> Connect-Ncentral -Key $key -ApiHost ncentral.organisation.com
     Creates a connection to ncentral.organisation.com with default access token expiry and refresh token expiry duration.
 
     .EXAMPLE
-    $Key = Read-Host -AsSecureString "JWT token"
-    Connect-Ncentral -Key $key -ApiHost ncentral.organisation.com -accessexpiry 60 -refreshexpiry 600
+    PS> $Key = Read-Host -AsSecureString "JWT token"
+    PS> Connect-Ncentral -Key $key -ApiHost ncentral.organisation.com -accessexpiry 60 -refreshexpiry 600
     Creates a connection to ncentral.organisation.com with a non-default access token expiry and refresh token expiry duration.
 #>
 function Connect-Ncentral {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true)][Alias('Token', 'JwtToken', 'Jwt')][securestring]$Key,
-        [parameter(Mandatory=$true)][string]$ApiHost,
-        [parameter(Mandatory=$false)][int]$AccessExpiry = $null,
-        [parameter(Mandatory=$false)][int]$RefreshExpiry = $null
+        [parameter(Mandatory = $true)][Alias('Token', 'JwtToken', 'Jwt')][securestring]$Key,
+        [parameter(Mandatory = $true)][string]$ApiHost,
+        [parameter(Mandatory = $false)][int]$AccessExpiry = $null,
+        [parameter(Mandatory = $false)][int]$RefreshExpiry = $null
     )
 
     $Global:_NcentralSession = [NcentralClass]::New($ApiHost, $Key, $AccessExpiry, $RefreshExpiry)
     if ($Global:_NcentralSession.IsConnected) {
         Write-Verbose ("Successfully connected to NCentralHost {0}" -f $ApiHost)
-    } else {
+    }
+    else {
         Write-Error ("Authentication failed to Ncentral Host {0} with error {1}" -f $ApiHost, $Global:_NcentralSession.ErrorText)
     }
 }
@@ -344,7 +407,7 @@ function Connect-Ncentral {
     Disconnect-Ncentral
 
     .EXAMPLE
-    Test-NcentralConnection
+    PS> Test-NcentralConnection
 
     You need to call Connect-Ncentral first before using this function
     At C:\Scripts\Powershell\N-central\NcentralRESTAPI.ps1:192 char:9
@@ -387,7 +450,7 @@ function Test-NcentralConnection {
     Connect-Ncentral
 
     .EXAMPLE
-    Disconnect-Ncentral
+    PS> Disconnect-Ncentral
 
 #>
 function Disconnect-Ncentral {
@@ -405,13 +468,13 @@ function Disconnect-Ncentral {
     Get N-central server information.
 
     .EXAMPLE
-    Get-NcentralServerInfo
+    PS> Get-NcentralServerInfo
 #>
 function Get-NcentralServerInfo {
     Param()
 
     Test-NcentralConnection
-    $Global:_NcentralSession.GetRaw("server-info")
+    $Global:_NcentralSession.GetOne("server-info")
 }
 
 <#
@@ -425,21 +488,22 @@ function Get-NcentralServerInfo {
     Information about the server health
 
     .EXAMPLE
-    Get-NcentralServerHealth
+    PS> Get-NcentralServerHealth
 #>
 function Get-NcentralServerHealth {
     Param()
 
     Test-NcentralConnection
-    $Global:_NcentralSession.GetRaw("health")
+    $Global:_NcentralSession.GetOne("health")
 }
 
 <#
     .SYNOPSIS
-    gets all customers
+    gets customers (either all or filtered by customer name)
 
     .DESCRIPTION
-    Gets all customers that are visible for the N-central connection
+    Gets customers that are visible for the N-central connection.
+    Default, all customers are returned, but you can filter on customer name.
 
     .INPUTS
     Nothing.
@@ -454,22 +518,50 @@ function Get-NcentralServerHealth {
     Returns only the customer(s) with the matching name.
 
     .EXAMPLE
-    Get-NcentralCustomer
+    PS> Get-NcentralCustomer
+    Gets all customers
+
+    .EXAMPLE
+    PS> 'Customer1', 'Customer2' | Get-NcentralCustomer
+    Gets certain customers by specifying the names as pipeline values
+
+    .EXAMPLE
+    PS> Get-NcentralCustomer -CustomerName 'Customer1', 'Customer2'
+    Gets certain customers by specifying the names as explicit values
 
 #>
 function Get-NcentralCustomer {
-    [CmdletBinding(DefaultParametersetName='All')]
+    [CmdletBinding(DefaultParametersetName = 'All')]
     Param(
-        [parameter(Mandatory=$false, ParameterSetName='All')][switch]$All,
-        [parameter(Mandatory=$True, ParameterSetName='Customer')][string]$CustomerName
+        [parameter(Mandatory = $false, ParameterSetName = 'All')][switch]$All,
+        [parameter(Mandatory = $True, ParameterSetName = 'Customer', ValueFromPipeline = $true)][string[]]$CustomerName,
+        [parameter(Mandatory = $false, ParameterSetName = 'Customer')][switch]$ExactMatch
     )
 
-    Test-NcentralConnection
-    $Customers = $Global:_NcentralSession.get("customers")
-    if ($PSCmdlet.ParameterSetName -eq 'Customer') {
-        $customers = $customers | Where-object { $_.customerName -eq $CustomerName }
+    begin {
+        Test-NcentralConnection
+        $CustomerFilter = [System.Collections.HashTable]@{ 'CustomerName' = [System.Collections.ArrayList]@() }
     }
-    return $Customers
+    process {
+        if ($PSCmdlet.ParameterSetName -eq 'Customer') {
+            Write-Debug ("Adding customer(s) {0} to customer filter" -f (ConvertTo-Json -InputObject $CustomerName -Compress))
+            foreach ($c in $CustomerName) {
+                if ($CustomerFilter.values -notcontains $c) {
+                    $CustomerFilter['CustomerName'].Add($c) | Out-Null
+                }
+            }
+        }
+    }
+
+    end {
+        if (($customerFilter['CustomerName'] | Measure-Object).count -gt 0) {
+            $customers = $Global:_NcentralSession.get("customers", $CustomerFilter, $ExactMatch)
+        }
+        else {
+            $Customers = $Global:_NcentralSession.get("customers")
+        }
+        return $Customers
+    }
 }
 
 <#
@@ -503,70 +595,51 @@ function Get-NcentralCustomer {
     A customer ID to limit the returned objects
 
     .EXAMPLE
-    Get-NcentralDevice
-
+    PS> Get-NcentralDevice
     Get all devices from the N-central server
 
     .EXAMPLE
-    Get-NcentralCustomer -CustomerName "ORGANISATION" | Get-NcentralDevice
-
+    PS> Get-NcentralCustomer -CustomerName "ORGANISATION" | Get-NcentralDevice
     Get all devices associated with customer name "ORGANISATION"
 
     .EXAMPLE
-    Get-NcentralDevice -CustomerId 10,11
-
+    PS> Get-NcentralDevice -CustomerId 10,11
     Gets all devices associated with customer IDs 10, and 11
 
     .EXAMPLE
-    Get-NcentralDevice -DeviceId 1000,2000,3000
-
+    PS> Get-NcentralDevice -DeviceId 1000,2000,3000
     Gets the devices with ID 1000, 2000, and 3000.
 #>
 function Get-NcentralDevice {
-    [CmdletBinding(DefaultParametersetName='All')]
+    [CmdletBinding(DefaultParametersetName = 'All')]
     Param(
-        [parameter(Mandatory=$false, ParameterSetName='All')][switch]$All,
-        [parameter(Mandatory=$true, ParameterSetName='Device', ValueFromPipelineByPropertyName=$true)][int[]]$DeviceId,
-        [parameter(Mandatory=$true, ParameterSetName='Customer', ValueFromPipelineByPropertyName=$true)][int[]]$CustomerId
+        [parameter(Mandatory = $false, ParameterSetName = 'All')][switch]$All,
+        [parameter(Mandatory = $true, ParameterSetName = 'Device', ValueFromPipelineByPropertyName = $true)][int[]]$DeviceId,
+        [parameter(Mandatory = $true, ParameterSetName = 'Customer', ValueFromPipelineByPropertyName = $true)][int[]]$CustomerId
     )
 
-    begin{
+    begin {
         Test-NcentralConnection
-        $alldevices = [System.Collections.ArrayList]@()
-        $addIds = [System.Collections.HashTable]@{}
-
-        if ($null -eq $deviceId) {
-            $API = "devices"
-            $devices = $Global:_NcentralSession.Get($API)
-        }
+        $GetAll = $True
+        $CustomerFilter = [System.Collections.HashTable]@{ 'CustomerId' = [System.Collections.ArrayList]@() }
+        $DeviceIdFilter = [System.Collections.HashTable]@{ 'DeviceId' = [System.Collections.ArrayList]@() }
     }
 
     process {
         switch ($PSCmdlet.ParameterSetName) {
-            'All' {
-                $allDevices.AddRange($devices) | Out-Null
-            }
             'Customer' {
-                foreach ($d in $devices) {
-                    if ($addIds.keys -notcontains $d.deviceId -and $customerId -contains $d.customerId) {
-                        Write-Verbose ("Add device ID {0} to output list" -f $d.deviceId)
-                        $alldevices.Add($d) | Out-Null
-                        $addIds[$d.deviceId] = $true
-                    } else {
-                        Write-Verbose ("Skipping device ID {0} as it is already in the list" -f $d.deviceId)
+                foreach ($c in $CustomerId) {
+                    if ($customerFilter['CustomerId'] -notcontains $c) {
+                        $GetAll = $false
+                        $customerFilter['CustomerId'].Add($c) | Out-Null
                     }
                 }
             }
             'Device' {
                 foreach ($d in $DeviceId) {
-                    if ($addIds.keys -notcontains $DeviceId) {
-                        Write-Verbose ("Add device ID {0} to output list" -f $d.deviceId)
-                        $API = ("devices/{0}" -f $d)
-                        $device = $Global:_NcentralSession.Get($API)
-                        $addIds[$device.deviceId] = $true
-                        $alldevices.Add($device) | Out-Null
-                    } else {
-                        Write-Verbose ("Skipping device ID {0} as it is already in the list" -f $d.deviceId)
+                    if ($DeviceIdFilter['DeviceId'] -notcontains $d) {
+                        $GetAll = $false
+                        $DeviceIdFilter['DeviceId'].Add($d) | Out-Null
                     }
                 }
             }
@@ -574,7 +647,21 @@ function Get-NcentralDevice {
     }
 
     end {
-        return $alldevices
+        if ($true -eq $GetAll) {
+            return $global:_NcentralSession.Get('devices')
+        }
+        if (($CustomerFilter['CustomerId'] | Measure-Object).count -gt 0) {
+            return $global:_NcentralSession.Get('devices', $CustomerFilter, $true)
+        }
+        if (($DeviceIdFilter | Measure-Object).count -gt 0) {
+            $deviceList = [System.Collections.ArrayList]@()
+            foreach ($d in $deviceIdFilter['DeviceId']) {
+                $API = "devices/{0}" -f $d
+                $deviceList.Add($global:_NcentralSession.Get($API)) | Out-Null
+            }
+            return $deviceList
+        }
+        return $null
     }
 }
 
@@ -592,57 +679,48 @@ function Get-NcentralDevice {
     An array of devices
 
     .PARAMETER DeviceName
-    Only devices matching the regular expression DeviceName are returned.
+    Only devices matching the exact name are returned
 
     .PARAMETER CustomerId
     Limit the results to a single customer.
 
     .EXAMPLE
-    Get-NcentralDeviceByName -DeviceName SQL, DB
-
+    PS> Get-NcentralDeviceByName -DeviceName SQL, DB
     Gets all devices for all customers with 'SQL' or 'DB' in the name
 
     .EXAMPLE
-    '^SQL', 'DB$' | Get-NcentralDeviceByName -CustomerId 1000
-
+    PS> '^SQL', 'DB$' | Get-NcentralDeviceByName -CustomerId 1000
     Gets all devices for customer ID 1000 where the name starts with SQL or the name ends with DB.
 #>
 function Get-NcentralDeviceByName {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true,ValueFromPipeline=$true)][string[]]$DeviceName,
-        [parameter(Mandatory=$false)][int]$CustomerId = $null
+        [parameter(Mandatory = $true, ValueFromPipeline = $true)][string[]]$DeviceName,
+        [parameter(Mandatory = $false)][int]$CustomerId = $null
     )
 
     begin {
         Test-NcentralConnection
-        $alldevices = [System.Collections.ArrayList]@()
-        $addIds = [System.Collections.Hashtable]@{}
-        $API = "devices"
-        $devices = $Global:_NcentralSession.Get($API)
+        $DeviceFilter = [System.Collections.HashTable]@{
+            'longName' = [System.Collections.ArrayList]@()
+        }
     }
 
     process {
-        $filter = $DeviceName -join '|'
-        Write-Verbose ("Filtering using filter {0}" -f $filter)
-        foreach ($d in $devices) {
-            if ($d.longname -match $filter) {
-
-                if ((0 -eq [int]$customerId -or $d.customerId -eq $customerId) -and $addIds.Keys -notcontains $d.deviceId) {
-                    Write-Verbose ("Add device ID {0} to output list" -f $d.deviceId)
-                    $alldevices.Add($d) | Out-Null
-                    $addIds[$d.deviceId] = $true
-                } else {
-                    Write-Verbose ("Skipping device ID {0} as it is already in the list" -f $d.deviceId)
-                }
-            } else {
-                Write-Verbose ("Skipping device ID {0} as does not match the filter" -f $d.deviceId)
+        foreach ($d in $deviceName) {
+            Write-Debug "Adding $d to longName filter"
+            if ($DeviceFilter['longName'] -notcontains $d) {
+                $DeviceFilter['longName'].Add($d) | Out-Null
             }
+        }
+        if ($null -ne $customerId) {
+            Write-Debug "Adding $customerId to customerId filter"
+            $DeviceFilter['customerId'] = @($customerId)
         }
     }
 
     end {
-        return $alldevices
+        return $global:_NcentralSession.Get('devices', $DeviceFilter, $false)
     }
 }
 
@@ -663,19 +741,17 @@ function Get-NcentralDeviceByName {
     A list of tasks
 
     .EXAMPLE
-    Get-NcentralCustomer -CustomerName "ORGANISATION" | Get-NcentralDevice | Get-NcentralDeviceScheduledTask
-
+    PS> Get-NcentralCustomer -CustomerName "ORGANISATION" | Get-NcentralDevice | Get-NcentralDeviceScheduledTask
     Gets all scheduled tasks for all devices associated with customer "ORGANISATION"
 
     .EXAMPLE
-    Get-NcentralDeviceScheduledTask -DeviceId 1,2,3,4
-
+    PS> Get-NcentralDeviceScheduledTask -DeviceId 1,2,3,4
     Gets all scheduled tasks for the explicitly named device IDs 1, 2, 3, and 4.
 #>
 function Get-NcentralDeviceScheduledTask {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true,ValueFromPipelineByPropertyName=$true)][int[]]$DeviceId
+        [parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)][int[]]$DeviceId
     )
 
     begin {
@@ -729,20 +805,19 @@ function Get-NcentralDeviceScheduledTask {
     If the status is requested, whether to return basic information or detailed information
 
     .EXAMPLE
-    Get-NcentralCustomer -CustomerName "ORGANISATION" | get-ncentraldeviceScheduledtask | Get-NcentralScheduledTask
-
+    PS> Get-NcentralCustomer -CustomerName "ORGANISATION" | get-ncentraldeviceScheduledtask | Get-NcentralScheduledTask
     Get the 'ORGANISATION' customer, get all scheduled tasks for this organisation, and return basic information on these scheduled tasks
 
     .EXAMPLE
-    Get-NcentralCustomer -CustomerName "ORGANISATION" | get-ncentraldeviceScheduledTask | Get-NcentralScheduledTask -Status -Details
+    PS> Get-NcentralCustomer -CustomerName "ORGANISATION" | get-ncentraldeviceScheduledTask | Get-NcentralScheduledTask -Status -Details
     Get the 'ORGANISATION' customer, get all devices in this organisation, get all scheduled tasks for these devices, and return detailed status information on these scheduled tasks
 #>
 function Get-NcentralScheduledTask {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true, ValueFromPipelineByPropertyName=$true)][int[]]$TaskId,
-        [parameter(Mandatory=$false)][switch]$Status = $false,
-        [parameter(Mandatory=$false)][switch]$Details = $false
+        [parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)][int[]]$TaskId,
+        [parameter(Mandatory = $false)][switch]$Status = $false,
+        [parameter(Mandatory = $false)][switch]$Details = $false
     )
 
     begin {
@@ -792,25 +867,25 @@ function Get-NcentralScheduledTask {
     The password for a custom credentials object.
 
     .EXAMPLE
-    $cred = New-NcentralScheduledTaskCredential -LocalSystem
+    PS> $cred = New-NcentralScheduledTaskCredential -LocalSystem
 
     .EXAMPLE
-    $cred = New-NcentralScheduledTaskCredential -CustomCredentials -Username MyUser -Password (Read-Host -AsSecureString)
+    PS> $cred = New-NcentralScheduledTaskCredential -CustomCredentials -Username MyUser -Password (Read-Host -AsSecureString)
 #>
 function New-NcentralScheduledTaskCredential {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true, ParameterSetName="LocalSystem")][switch]$LocalSystem,
-        [parameter(Mandatory=$true, ParameterSetName="DeviceCredentials")][switch]$DeviceCredentials,
-        [parameter(Mandatory=$true, ParameterSetName="CustomCredentials")][switch]$CustomCredentials,
-        [parameter(Mandatory=$true, ParameterSetName="CustomCredentials")][string]$Username,
-        [parameter(Mandatory=$true, ParameterSetName="CustomCredentials")][securestring]$Password
+        [parameter(Mandatory = $true, ParameterSetName = "LocalSystem")][switch]$LocalSystem,
+        [parameter(Mandatory = $true, ParameterSetName = "DeviceCredentials")][switch]$DeviceCredentials,
+        [parameter(Mandatory = $true, ParameterSetName = "CustomCredentials")][switch]$CustomCredentials,
+        [parameter(Mandatory = $true, ParameterSetName = "CustomCredentials")][string]$Username,
+        [parameter(Mandatory = $true, ParameterSetName = "CustomCredentials")][securestring]$Password
     )
 
     Test-NcentralConnection
-    Write-Verbose "type = $($PSCmdlet.ParameterSetName)"
-    Write-Verbose "Username = $Username"
-    Write-Verbose "Password = $Password"
+    Write-Debug "type = $($PSCmdlet.ParameterSetName)"
+    Write-Debug "Username = $Username"
+    Write-Debug "Password = $Password"
     return [NcentralScheduledTaskCredential]::New($PSCmdlet.ParameterSetName, $Username, $Password)
 }
 
@@ -828,20 +903,20 @@ function New-NcentralScheduledTaskCredential {
     One or more parameter values. The number of values should match the number of values.
 
     .EXAMPLE
-    $params = New-NcentralScheduledTaskParameter -Name 'CountFile', 'Folder' -Value '*','C:\Temp'
+    PS> $params = New-NcentralScheduledTaskParameter -Name 'CountFile', 'Folder' -Value '*','C:\Temp'
 #>
 function New-NcentralScheduledTaskParameter {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true)][string[]]$Name,
-        [parameter(Mandatory=$true)][string[]]$Value
+        [parameter(Mandatory = $true)][string[]]$Name,
+        [parameter(Mandatory = $true)][string[]]$Value
     )
 
     $Count = ($Name | Measure-Object).count
     if (($Value | Measure-Object).count -ne $Count) {
         throw ("The Name and Value arrays should have the same number of elements")
     }
-    return 0..($Count-1) | ForEach-Object { [NcentralScheduledTaskParameter]::New($Name[$_], $Value[$_]) }
+    return 0..($Count - 1) | ForEach-Object { [NcentralScheduledTaskParameter]::New($Name[$_], $Value[$_]) }
 }
 
 <#
@@ -893,24 +968,23 @@ function New-NcentralScheduledTaskParameter {
     New-NcentralScheduledTaskParameter
 
     .EXAMPLE
-    $name = "Randomtest--$(get-random -Minimum 10000000 -Maximum 99999999)"
-    $cred = New-NcentralScheduledTaskCredential -DeviceCredentials
-    $params = New-NcentralScheduledTaskParameter -Name "CountFile", "Folder" -Value "*", "C:\Windows"
-    Get-NcentralDevice | New-NcentralScheduledTask -TaskName $name -TaskType AutomationPolicy -RepositoryId 1530938361 -Parameters $params -credential $cred
-
+    PS> $name = "Randomtest--$(get-random -Minimum 10000000 -Maximum 99999999)"
+    PS> $cred = New-NcentralScheduledTaskCredential -DeviceCredentials
+    PS> $params = New-NcentralScheduledTaskParameter -Name "CountFile", "Folder" -Value "*", "C:\Windows"
+    PS> Get-NcentralDevice | New-NcentralScheduledTask -TaskName $name -TaskType AutomationPolicy -RepositoryId 1530938361 -Parameters $params -credential $cred
     Get all devices that the API account has access to, and create a support task on all of them. Because the devicelist is added through the pipeline, the device ID is added to the name.
 #>
 function New-NcentralScheduledTask {
     [CmdletBinding()]
     Param(
-        [parameter(Mandatory=$true)][string]$TaskName,
-        [parameter(Mandatory=$true, ParameterSetName="DeviceId")][int]$DeviceId,
-        [parameter(Mandatory=$true, ParameterSetName="DeviceId")][int]$CustomerId,
-        [parameter(Mandatory=$true, ValueFromPipeline=$true, ParameterSetName="DeviceList")]$DeviceList,
-        [parameter(Mandatory=$true)][ValidateSet('AutomationPolicy','AVDefenderFullScan','AVDefenderQuickScan','FileTransfer', 'Script', 'SoftwareDistribution')][string]$TaskType,
-        [parameter(Mandatory=$true)][Alias("RepositoryId")][int]$ItemId,
-        [parameter(Mandatory=$false)][NcentralScheduledTaskCredential]$credential = [NcentralScheduledTaskCredential]::New('LocalSystem',$null,$null),
-        [parameter(Mandatory=$false)][NcentralScheduledTaskParameter[]]$Parameters = @()
+        [parameter(Mandatory = $true)][string]$TaskName,
+        [parameter(Mandatory = $true, ParameterSetName = "DeviceId")][int]$DeviceId,
+        [parameter(Mandatory = $true, ParameterSetName = "DeviceId")][int]$CustomerId,
+        [parameter(Mandatory = $true, ValueFromPipeline = $true, ParameterSetName = "DeviceList")]$DeviceList,
+        [parameter(Mandatory = $true)][ValidateSet('AutomationPolicy', 'Script', 'MacScript')][string]$TaskType,
+        [parameter(Mandatory = $true)][Alias("RepositoryId")][int]$ItemId,
+        [parameter(Mandatory = $false)][NcentralScheduledTaskCredential]$credential = [NcentralScheduledTaskCredential]::New('LocalSystem', $null, $null),
+        [parameter(Mandatory = $false)][NcentralScheduledTaskParameter[]]$Parameters = @()
     )
 
     begin {
@@ -920,17 +994,18 @@ function New-NcentralScheduledTask {
 
     process {
         $body = [System.Collections.Hashtable]@{}
-        $body.Add("itemId",$ItemId) | Out-Null
+        $body.Add("itemId", $ItemId) | Out-Null
         $body.Add("taskType", $TaskType) | Out-Null
-        $body.add("credential",$Credential) | Out-Null
-        $body.Add("parameters",$Parameters) | Out-Null
+        $body.add("credential", $Credential) | Out-Null
+        $body.Add("parameters", $Parameters) | Out-Null
         if ($PSCmdlet.ParameterSetName -eq 'DeviceId') {
             $body.add("name", $TaskName) | Out-Null
             $body.add("deviceId", $DeviceId) | Out-Null
             $body.add("customerId", $CustomerId) | Out-Null
             $result = $global:_NcentralSession.Post("scheduled-tasks/direct", $body)
             $allresult.add($result) | Out-Null
-        } else {
+        }
+        else {
             $body.add("name", ("{0} - {1}" -f $TaskName, $DeviceList.deviceId)) | out-Null
             $body.add("deviceId", $DeviceList.deviceId) | Out-Null
             $body.add("customerId", $DeviceList.CustomerId) | Out-Null
