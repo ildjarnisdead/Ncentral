@@ -13,8 +13,8 @@
 Import-Module ./NcentralRest/NcentralRest.psm1
 
 # Define the URL and token values for the API call
-$ApiHost = "example.n-able.com"
-$jwt = "<JWT TOKEN>"
+$ApiHost = "https://api.example.com/ncs"
+$jwt = ""
 
 # Generate a secure string from the token $jwt
 $secureString = ConvertTo-SecureString -String $jwt -AsPlainText -Force
@@ -43,11 +43,26 @@ $pageSize = 500
 $continue = $true
 $aggregatedReport = @{}
 
-# Create a per-orgUnitId device counter
-$orgUnitDeviceCount = @{}
-
 do {
-    $devices = Get-NcentralDevice -PageNumber $page -PageSize $pageSize
+    $attemptCounter = 0
+    $devices = $null
+
+    do {
+        try {
+            $devices = Get-NcentralDevice -PageNumber $page -PageSize $pageSize
+            $attemptCounter = 0
+        }
+        catch {
+            $attemptCounter++
+            if ($attemptCounter -eq 3) {
+                Write-Host "Failed to retrieve devices. Skipping rest of loop."
+                break
+            }
+            # Wait for 5 seconds before retrying
+            Start-Sleep -Seconds 5
+        }
+    } while ($null -eq $devices)
+    
     # Print debug info
     # Write-Host "Page $page : $($devices.Count) devices"
     foreach ($device in $devices) {
@@ -55,7 +70,7 @@ do {
         # Print device content as JSON
         # Write-Host "Device: $(ConvertTo-Json $device)"
         
-        $orgUnitId = $device.customerId
+        $orgUnitId = $device.orgUnitId
         # Write-Host "Device ID: $($device.deviceId), Customer ID: $orgUnitId"
         
         $aggregatedStruct = $aggregatedReport[$orgUnitId]
@@ -85,19 +100,23 @@ do {
             # Print if we have reached this point
             # Write-Host "Customer ID: $($Customer.orgUnitId), SO Name: $($SoUnit.orgUnitName), Customer Name: $($BusinessUnit.orgUnitName)"
 
+            # Business Unit (BU) -- Customer
+            # Segment -- SO
+            # N-Able ID -- Customer ID
+
             $aggregatedStruct = [PSCustomObject]@{
-                'Customer ID'           = $Customer.orgUnitId
-                'SO Name'               = $SoUnit.orgUnitName 
-                'Customer Name'         = $BusinessUnit.orgUnitName
-                #'BU Windows Assets Discovered' = $BusinessUnitDeviceCount
-                'Customer Total Assets' = 0
-                #'BU Probe Count' = Get-ProbeCount($BusinessUnit.CustomerID)
+                'N-Able ID'                       = $Customer.orgUnitId
+                'Segment'                        = $SoUnit.orgUnitName 
+                'Business Unit Name'             = $BusinessUnit.orgUnitName
+                'BU Windows Assets Discovered'   = 0
+                'BU Total Assets'                = 0
+                'BU Probe Count'                 = 0
                 #'BU Discovery Started Date' =  Get-DiscoveryStartedDate($BusinessUnitProbe)
-                'Site ID'               = if ($Site) { $Site.orgUnitId } else { "" }
-                'Site Name'             = if ($Site) { $Site.orgUnitName } else { "" }
-                #'Site Windows Assets Discovered' = $SiteDeviceCount
-                'Site Total Assets'     = if ($Site) { 0 } else { "" }
-                #'Site Probe Count' = Get-ProbeCount($Site.CustomerID)
+                'Site ID'                        = if ($Site) { $Site.orgUnitId } else { "" }
+                'Site Name'                      = if ($Site) { $Site.orgUnitName } else { "" }
+                'Site Windows Assets Discovered' = if ($Site) { 0 } else { "" }
+                'Site Total Assets'              = if ($Site) { 0 } else { "" }
+                'Site Probe Count'               = 0
                 #'Site Discovery Started Date' =  Get-DiscoveryStartedDate($SiteProbe)
             }
 
@@ -105,26 +124,40 @@ do {
         }
 
         # Increment the device count for the at the Business Unit level
-        $orgUnitDeviceCount[$aggregatedStruct.'Customer ID']++
+        $aggregatedStruct.'BU Total Assets'++
+        # If the device OS type contains Windows, increment the Windows device count
+        if ($device.osType -imatch "Windows") {
+            $aggregatedStruct.'BU Windows Assets Discovered'++
+        }
+
+        if ($device.isProbe -eq $true) {
+            $aggregatedStruct.'BU Probe Count'++
+        }
+        
+
         # Print debug info, including counting the devices
         # Write-Host "Device ID: $($device.deviceId), Customer ID: $($aggregatedStruct.'Customer ID'), Site ID: $($aggregatedStruct.'Site ID'), Customer Total Assets: $($orgUnitDeviceCount[$aggregatedStruct.'Customer ID'])"
         
         if ($aggregatedStruct.'Site ID') {
-            $orgUnitDeviceCount[$aggregatedStruct.'Site ID']++
+            # Perform the counts at the site level
+            # Increment the device count for the at the Site level
+            $aggregatedStruct.'Site Total Assets'++
+
+            # If the device OS type contains Windows, increment the Windows device count
+            if ($device.osType -imatch "Windows") {
+                $aggregatedStruct.'Site Windows Assets Discovered'++
+            }
+
+            # if field discoveredName is not empty nor null, increment the Site 'Site Probe Count' count
+            if ($device.isProbe -eq $true) {
+                $aggregatedStruct.'Site Probe Count'++
+            }
+
         }
     }
     $page++
     $continue = $devices.Count -eq $pageSize
 } while ($continue)
-
-# Now that we have the aggregated report, loop through Map. let's update the total assets count for each orgUnitId
-foreach ($orgUnitId in $aggregatedReport.Keys) {
-    $aggregatedStruct = $aggregatedReport[$orgUnitId]
-    $aggregatedStruct.'Customer Total Assets' = $orgUnitDeviceCount[$aggregatedStruct.'Customer ID']
-    if ($aggregatedStruct.'Site ID') {
-        $aggregatedStruct.'Site Total Assets' = $orgUnitDeviceCount[$aggregatedStruct.'Site ID']
-    }
-}
 
 
 # Generate the report by converting aggregatedReport to array then exporting to a CSV file
