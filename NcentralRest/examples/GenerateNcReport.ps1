@@ -64,7 +64,7 @@ do {
     } while ($null -eq $devices)
     
     # Print debug info
-    # Write-Host "Page $page : $($devices.Count) devices"
+    Write-Host "Page $page : $($devices.Count) devices"
     foreach ($device in $devices) {
 
         # Print device content as JSON
