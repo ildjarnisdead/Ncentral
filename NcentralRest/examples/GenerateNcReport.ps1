@@ -35,6 +35,8 @@ do {
     $continue = $orgUnits.Count -eq $pageSize
 } while ($continue)
 
+# Print the orgUnitMap as JSON
+# Write-Host "orgUnitMap: $(ConvertTo-Json $orgUnitMap)"
 
 # Next, let's get the list of devices from the NC. devices will be aggregated based on the orgUnitId and saved to a Map collection
 # The collection will then be used to generate CSV report
@@ -42,6 +44,12 @@ $page = 1
 $pageSize = 500
 $continue = $true
 $aggregatedReport = @{}
+
+# create a map to store business unit device count
+$orgUnitDeviceCount = @{}
+$orgUnitsProbeCount = @{}
+
+# $shouldBreak = $false
 
 do {
     $attemptCounter = 0
@@ -70,30 +78,33 @@ do {
         # Print device content as JSON
         # Write-Host "Device: $(ConvertTo-Json $device)"
         
-        $orgUnitId = $device.orgUnitId
-        if ($null -eq $orgUnitId) {
-            # If orgUnitId is null, use customerId instead
-            $orgUnitId = $device.customerId
-        }
-        # Write-Host "Device ID: $($device.deviceId), Customer ID: $orgUnitId"
+        # set $orgUnitId to the string value of device.orgUnitId if defined, otherwise set it to the string value of device.customerId. If both are not defined, skip the device
+        $orgUnitId = if ($device.orgUnitId) { [string]$device.orgUnitId } elseif ($device.customerId) { [string]$device.customerId } else { continue }
+        
         
         $aggregatedStruct = $aggregatedReport[$orgUnitId]
         if ($null -eq $aggregatedStruct) {
-            $BusinessUnit = $orgUnitMap[[string]$orgUnitId]
+            $BusinessUnit = $orgUnitMap[$orgUnitId]
 
             # Print debug info
             # Write-Host "Business Unit: $(ConvertTo-Json $BusinessUnit)"
 
 
             # Resolve so_id, so_name, customer_id, customer_name, site_id, site_name depending on $BusinessUnit's orgUnitType (SO/CUSTOMER/SITE)
+            $parentId = [string]$BusinessUnit.parentId
+
+            # Print orgUnitId, parentId, and orgUnitType
+            # Write-Host "orgUnitId: $orgUnitId, parentId: $parentId, orgUnitType: $($BusinessUnit.orgUnitType)"
+
             if ($BusinessUnit.orgUnitType -eq "CUSTOMER") {
-                $SoUnit = $orgUnitMap[[string]$BusinessUnit.parentId]
+                $SoUnit = $orgUnitMap[$parentId]
                 $Customer = $BusinessUnit
                 $Site = $null
             }
             elseif ($BusinessUnit.orgUnitType -eq "SITE") {
+                # Write-Host "Site: $(ConvertTo-Json $BusinessUnit)"
                 $Site = $BusinessUnit
-                $Customer = $orgUnitMap[[string]$BusinessUnit.parentId]
+                $Customer = $orgUnitMap[$parentId]
                 $SoUnit = $orgUnitMap[[string]$Customer.parentId]
             }
             else {
@@ -109,7 +120,7 @@ do {
             # N-Able ID -- Customer ID
 
             $aggregatedStruct = [PSCustomObject]@{
-                'N-Able ID'                       = $Customer.orgUnitId
+                'N-Able ID'                      = $Customer.orgUnitId
                 'Segment'                        = $SoUnit.orgUnitName 
                 'Business Unit Name'             = $BusinessUnit.orgUnitName
                 'BU Windows Assets Discovered'   = 0
@@ -129,10 +140,7 @@ do {
 
         # Increment the device count for the at the Business Unit level
         $aggregatedStruct.'BU Total Assets'++
-        # If the device OS type contains Windows, increment the Windows device count
-        if ($device.osType -imatch "Windows") {
-            $aggregatedStruct.'BU Windows Assets Discovered'++
-        }
+        
 
         if ($device.isProbe -eq $true) {
             $aggregatedStruct.'BU Probe Count'++
@@ -141,28 +149,88 @@ do {
 
         # Print debug info, including counting the devices
         # Write-Host "Device ID: $($device.deviceId), Customer ID: $($aggregatedStruct.'Customer ID'), Site ID: $($aggregatedStruct.'Site ID'), Customer Total Assets: $($orgUnitDeviceCount[$aggregatedStruct.'Customer ID'])"
-        
         if ($aggregatedStruct.'Site ID') {
+            # Write-Host "Device ID: $($device.deviceId), Site ID: $($aggregatedStruct.'Site ID'), Site Total Assets: $($aggregatedStruct.'Site Total Assets')"
+            
             # Perform the counts at the site level
             # Increment the device count for the at the Site level
             $aggregatedStruct.'Site Total Assets'++
 
-            # If the device OS type contains Windows, increment the Windows device count
-            if ($device.osType -imatch "Windows") {
-                $aggregatedStruct.'Site Windows Assets Discovered'++
+            # There will be multiple sites belonging to the same business unit, so we need to aggregate the counts at the business unit level
+            $buId = [string]$aggregatedStruct.'N-Able ID'
+            if ($null -eq $orgUnitDeviceCount[$buId]) {
+                $orgUnitDeviceCount[$buId] = 0
             }
+            if ($null -eq $orgUnitsProbeCount[$buId]) {
+                $orgUnitsProbeCount[$buId] = 0
+            }
+            
+            $orgUnitDeviceCount[$buId]++
 
             # if field discoveredName is not empty nor null, increment the Site 'Site Probe Count' count
             if ($device.isProbe -eq $true) {
-                $aggregatedStruct.'Site Probe Count'++
+                $orgUnitsProbeCount[$buId]++
             }
 
+
+            # Print orgUnit counters
+            # Write-Host "orgUnitDeviceCount: $(ConvertTo-Json $orgUnitDeviceCount)"
+            # Write-Host "orgUnitsProbeCount: $(ConvertTo-Json $orgUnitsProbeCount)"
+
+        }
+        else {
+            # Increment the device count for the at the Business Unit level
+            $aggregatedStruct.'BU Total Assets'++
         }
     }
     $page++
     $continue = $devices.Count -eq $pageSize
 } while ($continue)
 
+
+# print orgUnitDeviceCount and orgUnitsProbeCount as JSON
+# Write-Host "orgUnitDeviceCount: $(ConvertTo-Json $orgUnitDeviceCount)"
+# Write-Host "orgUnitsProbeCount: $(ConvertTo-Json $orgUnitsProbeCount)"
+
+# Write-Host "Aggregated Report: $(ConvertTo-Json $aggregatedReport)"
+
+# Loop through values in $aggreatedReport and update the 'BU Probe Count' field with the value from $orgUnitsProbeCount
+foreach ($orgUnitId in $aggregatedReport.Keys) {
+    
+    $aggregatedStruct = $aggregatedReport[$orgUnitId]
+    # if the orgUnitId is not found in the aggregatedReport, print it as a warning
+    if ($null -eq $aggregatedStruct) {
+        Write-Host "Warning: orgUnitId $orgUnitId not found in the aggregatedReport"
+        continue
+    }
+    # if Site ID is empty, then it's a customer. skip
+    if (-not $aggregatedStruct.'Site ID') {
+        continue
+    }
+    
+    # If Site ID is not empty, then it's a site, so we need to update the "BU Total Assets" 'BU Probe Count' fields
+    # resolve entry from orgUnitsProbeCount using N-Able ID
+    $customerId = [string]$aggregatedStruct.'N-Able ID'
+
+
+    
+    if ($null -eq $orgUnitsProbeCount[$customerId]) {
+        # This is an error. Print a warning, and continue
+        Write-Host "Warning: customerId $customerId has no Probe Count calculated. skipping"
+        continue
+    }
+    if ($null -eq $orgUnitDeviceCount[$customerId]) {
+        # This is an error. Print a warning, and continue
+        Write-Host "Warning: customerId $customerId has no Total Assets calculated. skipping"
+        continue
+    }
+
+    # Update the 'BU Probe Count' field with the value from $orgUnitsProbeCount
+    $aggregatedStruct.'BU Probe Count' = $orgUnitsProbeCount[$customerId]
+
+    # Update the 'BU Total Assets' field with the value from $orgUnitDeviceCount
+    $aggregatedStruct.'BU Total Assets' = $orgUnitDeviceCount[$customerId]
+}
 
 # Generate the report by converting aggregatedReport to array then exporting to a CSV file
 $report = @()
