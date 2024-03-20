@@ -71,6 +71,10 @@ do {
         # Write-Host "Device: $(ConvertTo-Json $device)"
         
         $orgUnitId = $device.orgUnitId
+        if ($null -eq $orgUnitId) {
+            # If orgUnitId is null, use customerId instead
+            $orgUnitId = $device.customerId
+        }
         # Write-Host "Device ID: $($device.deviceId), Customer ID: $orgUnitId"
         
         $aggregatedStruct = $aggregatedReport[$orgUnitId]
