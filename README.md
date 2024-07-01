@@ -1,7 +1,10 @@
+# WARNING
+Please note that I have very little time to work on this, this version is only working for 2023.9 and is left as a proof of concept, improvements and new features may or may not be added in the future.
+
 # Powershell interface for the N-Central REST API
 
 In version 2023.9.0.25, N-Able added a new REST API to N-Central.
-For the old SOAP API there was already a PowerShell module, this module can be used to talk to the REST API
+For the old SOAP API there was already a PowerShell module, this module can be used to talk to the REST API.
 
 # Supported versions
 
